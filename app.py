@@ -5,12 +5,12 @@ st.set_page_config(layout="wide", page_title="MyCarbon")
 
 # Page setup
 advanced_page = st.Page(
-    page="views/advanced.py",
+    page="advanced.py",
     title="Carbon Calculator",
 )
 
 info_page = st.Page(
-    page="views/about_me.py",
+    page="about_me.py",
     title="About",
     default=True,
 )
