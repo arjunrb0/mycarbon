@@ -12,7 +12,23 @@ My goal is to create an application that allows individuals to calculate their p
 🌐 Deployed online at: https://mycarbon.streamlit.app
 
 # Future Upgrades (Planned)
-Add more personalized tips and recommendations, Session saving / Better PDF report exports, Geo-aware emission tips based on user location, Gamification (badges, weekly targets)
+- Add more personalized tips and recommendations
+- Session saving / Better PDF report exports
+- Geo-aware emission tips based on user location
+- Gamification (badges, weekly targets)
+
+# Libraries Used
+My code employs many libraries such as:
+- Streamlit
+- Pandas
+- Plotly.express
+- Datetime
+- Matplotlib.pyplot
+- BytesI0
+- os
+- NamedTemporaryFile
+- Kaleido
+- plotly.graph_objects.
 
 # Reflection
 This project helped me connect my interests in environmental science, mathematics, and computer programming. I learned how to build a complete application from scratch, starting from research to deployment. It also improved my problem-solving mindset — balancing simplicity, accuracy, and usability. As I move into the IB Diploma Program with HL subjects in Math, Physics, and Chemistry, I plan to keep refining this app and use it as the foundation for extended essays or further technical projects.
