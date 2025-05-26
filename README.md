@@ -1,6 +1,6 @@
-# mycarbon
+# MyCarbon
 
-Project Portfolio: MyCarbon – Personal Carbon Footprint Calculator
+# Project Portfolio: MyCarbon – Personal Carbon Footprint Calculator
 
 My goal is to create an application that allows individuals to calculate their personal carbon footprint through data they enter about their transportation, energy consumption, dietary habits, land use and utility. Each of these factors has an influence on our overall carbon output, and by integrating them into a single web application, I hope to provide a medium for individuals to understand and reduce their carbon footprint. My project also allows the individuals to take a record of their carbon footprint, divided into categories and represented in a tabular, pie chart and a dial chart form. This allows users to quickly and easily understand their individual carbon footprint, making it user friendly. Integrating graphs into my product allows users to develop visual thinking, whereby the learner comes to understand and retain information better by the use of a dial chart, pie chart and a table.
 
