@@ -1,7 +1,7 @@
 import streamlit as st
 
 # Header section
-st.title("MyCarbon !!!!")
+st.title("MyCarbon")
 st.write("""
     In today's world, understanding and reducing our carbon footprint is essential to fight climate change. This tool helps you calculate your carbon emissions, enabling you to track and reduce your environmental impact.
 """)
