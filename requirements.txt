@@ -3,4 +3,3 @@ pandas
 plotly>=5.10.0
 fpdf
 matplotlib
-kaleido
