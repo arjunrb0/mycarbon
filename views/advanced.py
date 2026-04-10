@@ -230,7 +230,7 @@ df = pd.DataFrame({
 def make_pie_image(df):
     df_c = df[df["Category"] != "Total"]  # ✅ FIX HERE
 
-    values = df_c["Emissions (tonnes CO2/year)"].fillna(0)
+    values = df_c["Your Emissions (t CO₂/yr)"].fillna(0)
     colors = [CATEGORY_COLORS.get(c, "#999") for c in df_c["Category"]]
 
     fig, ax = plt.subplots(figsize=(6, 5))
@@ -257,7 +257,6 @@ def make_pie_image(df):
     fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
     buf.seek(0)
     plt.close(fig)
-
     return buf
 
 def make_gauge_image(value):
@@ -284,7 +283,7 @@ def make_gauge_image(value):
     ax.spines["polar"].set_visible(False)
     ax.grid(False)
 
-    label = "🟢 Low" if value <= 5 else "🟡 Moderate" if value <= 15 else "🔴 High"
+    label = "Low" if value <= 5 else "Moderate" if value <= 15 else "High"
     ax.set_title(f"Total: {value} t CO₂/yr  —  {label}", fontsize=12, fontweight="bold", pad=20)
 
     buf = BytesIO()
@@ -332,7 +331,7 @@ def make_table_image(df):
         your_val = row["Your Emissions (t CO₂/yr)"]
         avg_val  = row["India Average (t CO₂/yr)"]
         diff     = round(your_val - avg_val, 2)
-        flag     = "✓" if diff <= 0 else "↑"
+        flag     = "OK" if diff <= 0 else "UP"
         table_data.append([row["Category"], f"{your_val:.2f}", f"{avg_val:.2f}", f"{diff:+.2f} {flag}"])
 
     t = ax.table(
@@ -353,16 +352,17 @@ def make_table_image(df):
     fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
     buf.seek(0)
     plt.close(fig)
+
     return buf
 
 # ── Dynamic text & tips ───────────────────────────────────────────────────────
 def get_summary(total):
     if total <= 5:
-        return "🟢 Low Impact", "Your carbon footprint is well below the India average. Keep up your eco-friendly habits!"
+        return "Low Impact", "Your carbon footprint is well below the India average. Keep up your eco-friendly habits!"
     elif total <= 15:
-        return "🟡 Moderate Impact", "Your footprint is around the India average. There is room for improvement in a few areas."
+        return "Moderate Impact", "Your footprint is around the India average. There is room for improvement in a few areas."
     else:
-        return "🔴 High Impact", "Your footprint is significantly above average. Targeted changes can make a big difference."
+        return "High Impact", "Your footprint is significantly above average. Targeted changes can make a big difference."
 
 def get_tips(transportation_emissions, electricity_emissions, diet_emissions,
              waste_emissions, water_emissions, appliances_emissions, housing_emissions):
@@ -443,6 +443,20 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         tmp.write(buf.read())
         tmp.close()
         return tmp.name
+    
+    def clean(text):
+        return (text
+            .replace("—", "-")
+            .replace("–", "-")
+            .replace("\u2019", "'")
+            .replace("\u2018", "'")
+            .replace("\u201c", '"')
+            .replace("\u201d", '"')
+            .replace("•", "-")
+            .replace("…", "...")
+            .replace("✓", "+")
+            .replace("⚠", "!")
+    )
 
     pie_path   = buf_to_tmp(pie_buf)
     gauge_path = buf_to_tmp(gauge_buf)
@@ -575,7 +589,7 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
     for cat, val, note in cats:
         avg = INDIA_AVERAGES[cat]
         diff = round(val - avg, 2)
-        status = "Below average ✓" if diff <= 0 else f"Above average by {diff:.2f} t"
+        status = "Below average" if diff <= 0 else f"Above average by {diff:.2f} t"
         color = CATEGORY_COLORS.get(cat, "#999999")
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
         pdf.set_fill_color(r, g, b)
@@ -664,14 +678,14 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         pdf.set_font("Arial", "B", 10)
         pdf.set_text_color(255, 255, 255)
         above = val > avg
-        tag = "  ⚠ Priority" if above else "  ✓ On Track"
+        tag = "  ! Priority" if above else "  + On Track"
         pdf.cell(0, 6, f"  {cat}{tag}", fill=True, ln=True)
         pdf.set_text_color(40, 40, 40)
         pdf.set_font("Arial", "", 9)
         for tip in all_tips[cat]:
-            pdf.cell(6, 5, "", border=0)
-            pdf.multi_cell(0, 5, f"• {tip}")
-        pdf.ln(1)
+            pdf.set_x(10)
+            pdf.multi_cell(190, 5, clean(f"- {tip}"))
+    pdf.ln(1)
 
     # Final note
     pdf.ln(4)
@@ -699,7 +713,8 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         except Exception:
             pass
 
-    return pdf.output(dest="S").encode("latin-1", "ignore")
+    return bytes(bytearray(pdf.output()))
+
 
 
 # ── Buttons ───────────────────────────────────────────────────────────────────
@@ -729,9 +744,11 @@ if calculate_button:
     with c1:
         st.subheader("📋 Breakdown")
         st.dataframe(df, use_container_width=True, hide_index=True)
+
+
     with c2:
         st.subheader("🥧 Distribution")
-        st.plotly_chart(pie_fig, use_container_width=True)
+        st.plotly_chart(pie_fig, width='stretch')
     with c3:
         st.subheader("🎯 Total Gauge")
         st.plotly_chart(dial_fig, use_container_width=True)
