@@ -67,6 +67,21 @@ st.markdown("""
     <hr style='border:1px solid #c8e6c9; margin-bottom:20px'>
 """, unsafe_allow_html=True)
 
+# Keep section and field titles visually consistent across columns.
+st.markdown("""
+    <style>
+    div[data-testid="stMarkdownContainer"] h4 {
+        font-size: 1.1rem !important;
+        line-height: 1.3 !important;
+    }
+    div[data-testid="stCaptionContainer"] p {
+        font-size: 0.95rem !important;
+        font-weight: 600 !important;
+        color: #455a64 !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # ── Name Input ───────────────────────────────────────────────────────────────
 col_name, _, _, _, _ = st.columns(5)
 with col_name:
