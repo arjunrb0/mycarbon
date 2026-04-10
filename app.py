@@ -15,9 +15,6 @@ info_page = st.Page(
     default=True,
 )
 
-# Navigation without sections
-pg = st.navigation(pages=[advanced_page, info_page])
-
 # Navigation Setup with sections
 pg = st.navigation(
     {
