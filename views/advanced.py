@@ -687,7 +687,7 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         except Exception:
             pass
 
-    return bytes(pdf.output(dest="S"))
+    return pdf.output(dest="S").encode("latin-1", "ignore")
 
 
 # ── Buttons ───────────────────────────────────────────────────────────────────
