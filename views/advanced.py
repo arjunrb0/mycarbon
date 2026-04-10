@@ -228,24 +228,36 @@ df = pd.DataFrame({
 
 # ── Chart helpers (matplotlib only — no kaleido) ──────────────────────────────
 def make_pie_image(df):
-    df_c = df[df["Category"] != "Total"]
+    df_c = df[df["Category"] != "Total"]  # ✅ FIX HERE
+
+    values = df_c["Emissions (tonnes CO2/year)"].fillna(0)
     colors = [CATEGORY_COLORS.get(c, "#999") for c in df_c["Category"]]
+
     fig, ax = plt.subplots(figsize=(6, 5))
-    wedges, texts, autotexts = ax.pie(
-        df_c["Your Emissions (t CO₂/yr)"],
-        labels=df_c["Category"],
-        autopct=lambda p: f'{p:.1f}%' if p > 2 else '',
-        colors=colors,
-        startangle=140,
-        wedgeprops={"edgecolor": "white", "linewidth": 1.5}
-    )
+
+    if values.sum() == 0:
+        ax.text(0.5, 0.5, "No data to display", ha='center', va='center')
+        texts = []
+    else:
+        wedges, texts, autotexts = ax.pie(
+            values,
+            labels=df_c["Category"],
+            autopct=lambda p: f'{p:.1f}%' if p > 2 else '',
+            colors=colors,
+            startangle=140,
+            wedgeprops={"edgecolor": "white", "linewidth": 1.5}
+        )
+
     for t in texts:
         t.set_fontsize(9)
+
     ax.set_title("Carbon Emissions by Category", fontsize=13, fontweight="bold", pad=15)
+
     buf = BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
     buf.seek(0)
     plt.close(fig)
+
     return buf
 
 def make_gauge_image(value):
