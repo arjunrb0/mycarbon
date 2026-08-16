@@ -2,7 +2,8 @@ streamlit>=1.25.0
 pandas
 plotly>=5.10.0
 # fpdf2, NOT the unmaintained fpdf 1.7.2. Both import as `fpdf`, but only
-# fpdf2's output() returns a bytearray — on 1.7.2 it writes to stdout and
+# fpdf2's output() returns a bytearray - on 1.7.2 it writes to stdout and
 # returns a str, which breaks PDF download with a TypeError.
 fpdf2>=2.7
 matplotlib
+numpy
