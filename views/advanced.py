@@ -10,31 +10,38 @@ from io import BytesIO
 import os
 from tempfile import NamedTemporaryFile
 import plotly.graph_objects as go
+import sys
+
+# This page lives in views/ but imports modules from the project root.
+# `streamlit run app.py` puts the root on sys.path automatically; anything
+# else (test harnesses, direct execution) does not. Make it explicit so the
+# page is importable and testable regardless of how it is launched.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+import optimizer
 
 # ── Emission Factors ────────────────────────────────────────────────────────
+# Sourced values, units and confidence levels live in emission_factors.py.
+# This dict is now assembled from them rather than hardcoded, so there is a
+# single place where every number can be traced to a citation.
+import emission_factors as ef
+
 EMISSION_FACTORS = {
     "N/A": 0,
-    "Transportation": {
-        "Petrol": 2.31,
-        "Diesel": 2.68,
-        "Electric": 0.12,
-        "Hybrid": 1.5,
-    },
+    # kg CO2 per KILOMETRE (previously per litre, applied to km — a ~15x error)
+    "Transportation": {k: f.value for k, f in ef.TRANSPORT_PER_KM.items()},
     "Energy": {
-        "Electricity": 0.82,
-        "Appliances": 1.0,
+        "Electricity": ef.ELECTRICITY.value,        # kg CO2 / kWh
+        "Appliances": ef.APPLIANCE_EMBODIED.value,  # kg CO2 / appliance / yr
     },
-    "Diet": {
-        "Vegetarian": 0.9,
-        "Non-Vegetarian": 2.5,
-        "Vegan": 0.7,
-    },
-    "Waste": 0.232,
-    "Water": 0.0003,
-    "Housing": {
-        "Brick": 0.3,
-        "Wood": 0.2,
-    },
+    # kg CO2e per DAY for a reference ~3-meal diet, not per meal
+    "Diet": {k: f.value for k, f in ef.DIET_PER_DAY.items()},
+    "Waste": ef.WASTE.value,                        # kg CO2e / kg
+    "Water": ef.WATER.value,                        # kg CO2 / litre
+    # kg CO2 per sq ft per YEAR, embodied carbon amortised over building life
+    "Housing": {k: f.value for k, f in ef.HOUSING_PER_SQFT_YEAR.items()},
 }
 
 INDIA_AVERAGES = {
@@ -191,11 +198,43 @@ water_yr     = water * 365
 
 transportation_emissions = 0 if fuel_type == "N/A" else EMISSION_FACTORS["Transportation"][fuel_type] * distance_yr
 electricity_emissions    = EMISSION_FACTORS["Energy"]["Electricity"] * electricity_yr
-diet_emissions           = 0 if diet == "N/A" else EMISSION_FACTORS["Diet"][diet] * meals * 365
+# The diet factor is per DAY for a reference ~3-meal (2,000 kcal) diet, so
+# meals scales it rather than multiplying it. The old code multiplied a
+# per-meal-shaped number by meals AND by 365, which inflated diet emissions
+# roughly threefold.
+diet_emissions           = (
+    0 if diet == "N/A"
+    else EMISSION_FACTORS["Diet"][diet] * (meals / ef.DIET_REFERENCE_MEALS) * 365
+)
 waste_emissions          = EMISSION_FACTORS["Waste"] * waste_yr
 water_emissions          = EMISSION_FACTORS["Water"] * water_yr
 appliances_emissions     = EMISSION_FACTORS["Energy"]["Appliances"] * appliances
 housing_emissions        = 0 if house_material == "N/A" else EMISSION_FACTORS["Housing"][house_material] * house_size
+
+# Keep the unrounded kg/yr values — the optimizer works in kg and rounding
+# to tonnes here would throw away the precision it needs.
+BASELINE_KG = {
+    "Transportation": transportation_emissions,
+    "Electricity":    electricity_emissions,
+    "Diet":           diet_emissions,
+    "Waste":          waste_emissions,
+    "Water":          water_emissions,
+    "Appliances":     appliances_emissions,
+    "Housing":        housing_emissions,
+}
+
+USER_INPUTS = {
+    "distance": distance,
+    "fuel_type": fuel_type,
+    "electricity": electricity,
+    "appliances": appliances,
+    "diet": diet,
+    "meals": meals,
+    "house_material": house_material,
+    "house_size": house_size,
+    "water": water,
+    "waste": waste,
+}
 
 def to_tonnes(e):
     return round(e / 1000, 2)
@@ -322,6 +361,54 @@ def make_bar_comparison_image(df):
     plt.close(fig)
     return buf
 
+def make_before_after_image(baseline_kg, plan):
+    """Grouped bar: current emissions vs emissions after the plan, per category.
+
+    Only categories the plan actually touches are drawn — showing seven bars
+    where four are identical wastes the reader's attention on the ones that
+    did not move.
+    """
+    after_kg = optimizer.projected_baseline(baseline_kg, plan)
+    saved = optimizer.category_savings(plan)
+
+    cats = [c for c in baseline_kg if saved.get(c, 0) > 0]
+    cats.sort(key=lambda c: -baseline_kg[c])
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+
+    if not cats:
+        ax.text(0.5, 0.5, "No reduction actions selected", ha="center", va="center")
+        ax.axis("off")
+    else:
+        before_vals = [baseline_kg[c] / 1000 for c in cats]
+        after_vals  = [after_kg[c] / 1000 for c in cats]
+        x = np.arange(len(cats))
+        width = 0.35
+
+        b1 = ax.bar(x - width/2, before_vals, width, label="Before", color="#EF5350", alpha=0.85)
+        b2 = ax.bar(x + width/2, after_vals,  width, label="After plan", color="#2E7D32", alpha=0.85)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(cats, rotation=20, ha="right", fontsize=9)
+        ax.set_ylabel("tonnes CO2/year", fontsize=10)
+        ax.set_title("Emissions Before vs After Your Reduction Plan",
+                     fontsize=13, fontweight="bold")
+        ax.legend()
+        ax.spines[["top", "right"]].set_visible(False)
+
+        for bars in (b1, b2):
+            for bar in bars:
+                if bar.get_height() > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                            f"{bar.get_height():.2f}", ha="center", va="bottom", fontsize=7)
+
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+
 def make_table_image(df):
     fig, ax = plt.subplots(figsize=(7, 3.5))
     ax.axis("tight")
@@ -427,7 +514,8 @@ dial_fig.update_layout(margin=dict(t=60, b=0, l=20, r=20))
 # ── PDF Generator ─────────────────────────────────────────────────────────────
 def generate_pdf(name, df, total_emissions, transportation_emissions, electricity_emissions,
                  diet_emissions, waste_emissions, water_emissions, appliances_emissions,
-                 housing_emissions, fuel_type, diet, house_material):
+                 housing_emissions, fuel_type, diet, house_material,
+                 plan=None, budget=0):
 
     label, summary = get_summary(total_emissions)
     tips = get_tips(transportation_emissions, electricity_emissions, diet_emissions,
@@ -463,6 +551,12 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
     bar_path   = buf_to_tmp(bar_buf)
     table_path = buf_to_tmp(table_buf)
 
+    has_plan = plan is not None and len(plan.chosen) > 0
+    ba_path = buf_to_tmp(make_before_after_image(BASELINE_KG, plan)) if has_plan else None
+    tmp_paths = [pie_path, gauge_path, bar_path, table_path]
+    if ba_path:
+        tmp_paths.append(ba_path)
+
     class PDF(FPDF):
         def header(self):
             self.set_fill_color(46, 125, 50)
@@ -470,8 +564,10 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
             self.set_font("Arial", "B", 18)
             self.set_text_color(255, 255, 255)
             self.set_y(6)
-            display_name = name.strip() if name.strip() else "Your"
-            self.cell(0, 8, f"{display_name}'s Carbon Emission Report", ln=True, align="C")
+            display_name = name.strip()
+            title = (f"{display_name}'s Carbon Emission Report" if display_name
+                     else "Your Carbon Emission Report")   # not "Your's"
+            self.cell(0, 8, title, ln=True, align="C")
             self.set_font("Arial", "I", 10)
             self.cell(0, 6, f"Generated on {datetime.now().strftime('%d %B %Y, %H:%M')}", ln=True, align="C")
             self.set_text_color(0, 0, 0)
@@ -576,7 +672,7 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
 
     cats = [
         ("Transportation", transportation_emissions, "Petrol/Diesel engines emit CO2 per litre burned. EVs emit via grid power."),
-        ("Electricity",    electricity_emissions,    "India's grid is coal-heavy at ~0.82 kg CO2 per kWh consumed."),
+        ("Electricity",    electricity_emissions,    f"India's grid is coal-heavy at {ef.ELECTRICITY.value} kg CO2 per kWh (CEA, FY 2024-25)."),
         ("Diet",           diet_emissions,           "Non-veg diets have up to 3.5x the footprint of vegan diets."),
         ("Waste",          waste_emissions,           "Landfill waste produces methane, a potent greenhouse gas."),
         ("Water",          water_emissions,           "Water treatment and heating contribute to household emissions."),
@@ -706,8 +802,103 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         f"|  {'Below' if total_emissions < india_avg else 'Above'} India average by {abs(round(total_emissions - india_avg, 2))} t"
     )
 
+    # ── Page 4: Optimised Reduction Plan ──────────────────────────────────────
+    if has_plan:
+        after_kg = optimizer.projected_baseline(BASELINE_KG, plan)
+        base_total = sum(BASELINE_KG.values())
+        after_total = sum(after_kg.values())
+        pct = (base_total - after_total) / base_total * 100 if base_total else 0
+
+        pdf.add_page()
+        pdf.ln(4)
+
+        pdf.set_font("Arial", "B", 13)
+        pdf.set_text_color(46, 125, 50)
+        pdf.cell(0, 8, "Your Optimised Reduction Plan", ln=True)
+        pdf.set_draw_color(200, 230, 201)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(3)
+
+        pdf.set_font("Arial", "", 10)
+        pdf.set_text_color(40, 40, 40)
+        pdf.multi_cell(0, 6, clean(
+            f"Given an annual budget of Rs {budget:,.0f}, these actions cut the most CO2. "
+            f"The selection is computed by dynamic programming - it evaluates combinations "
+            f"of actions rather than ranking them individually, and treats overlapping "
+            f"actions (such as different ways of changing the same commute) as "
+            f"alternatives so their savings are never counted twice."
+        ))
+        pdf.ln(3)
+
+        # Headline numbers
+        pdf.set_fill_color(232, 245, 233)
+        pdf.set_draw_color(46, 125, 50)
+        pdf.set_line_width(0.5)
+        box_y = pdf.get_y()
+        pdf.rect(10, box_y, 190, 20, "FD")
+        pdf.set_xy(12, box_y + 3)
+        pdf.set_font("Arial", "B", 10)
+        pdf.set_text_color(27, 94, 32)
+        pdf.cell(0, 6, "Plan Summary", ln=True)
+        pdf.set_x(12)
+        pdf.set_font("Arial", "", 9)
+        pdf.set_text_color(40, 40, 40)
+        pdf.multi_cell(186, 5, clean(
+            f"Before: {base_total/1000:.2f} t CO2/yr   |   "
+            f"After: {after_total/1000:.2f} t CO2/yr   |   "
+            f"Saved: {(base_total - after_total)/1000:.2f} t ({pct:.1f}%)   |   "
+            f"Cost: Rs {plan.total_cost:,.0f} of Rs {budget:,.0f}"
+        ))
+        pdf.ln(6)
+
+        # Chosen actions
+        pdf.set_font("Arial", "B", 11)
+        pdf.set_text_color(46, 125, 50)
+        pdf.cell(0, 7, "Recommended Actions", ln=True)
+        pdf.set_draw_color(200, 230, 201)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(2)
+
+        pdf.set_font("Arial", "B", 9)
+        pdf.set_fill_color(46, 125, 50)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(88, 7, "  Action", border=0, fill=True)
+        pdf.cell(34, 7, "Category", border=0, fill=True, align="C")
+        pdf.cell(34, 7, "Cost (Rs/yr)", border=0, fill=True, align="C")
+        pdf.cell(34, 7, "Saves (kg/yr)", border=0, fill=True, align="C", ln=True)
+
+        pdf.set_text_color(40, 40, 40)
+        for i, s in enumerate(sorted(plan.chosen, key=lambda a: -a.saving)):
+            pdf.set_fill_color(*((245, 250, 245) if i % 2 == 0 else (255, 255, 255)))
+            pdf.set_font("Arial", "", 9)
+            pdf.cell(88, 6, clean(f"  {s.name}"), border=0, fill=True)
+            pdf.cell(34, 6, s.category, border=0, fill=True, align="C")
+            pdf.cell(34, 6, f"{s.cost:,.0f}", border=0, fill=True, align="C")
+            pdf.cell(34, 6, f"{s.saving:,.0f}", border=0, fill=True, align="C", ln=True)
+
+        pdf.set_font("Arial", "B", 9)
+        pdf.set_fill_color(232, 245, 233)
+        pdf.cell(88, 7, "  TOTAL", border=0, fill=True)
+        pdf.cell(34, 7, "", border=0, fill=True)
+        pdf.cell(34, 7, f"{plan.total_cost:,.0f}", border=0, fill=True, align="C")
+        pdf.cell(34, 7, f"{plan.total_saving:,.0f}", border=0, fill=True, align="C", ln=True)
+        pdf.ln(5)
+
+        pdf.image(ba_path, x=10, w=190)
+        pdf.ln(3)
+
+        pdf.set_font("Arial", "I", 8)
+        pdf.set_text_color(110, 110, 110)
+        pdf.multi_cell(0, 4, clean(
+            "How to read this: costs are annualised, so a one-time purchase is spread "
+            "over its useful life. Savings are estimated against your current emissions "
+            "using published emission factors, and assume each action is carried out in "
+            "full. Actions that reduce the same source of emissions are treated as "
+            "alternatives, so at most one of each such group is recommended."
+        ))
+
     # Cleanup
-    for p in [pie_path, gauge_path, bar_path, table_path]:
+    for p in tmp_paths:
         try:
             os.unlink(p)
         except Exception:
@@ -767,14 +958,238 @@ if calculate_button:
     for tip in tips:
         st.markdown(f"- {tip}")
 
+# ── Reduction Optimizer ───────────────────────────────────────────────────────
+st.markdown("<hr style='border:1px solid #c8e6c9'>", unsafe_allow_html=True)
+st.markdown("### 🎯 Reduction Plan Optimizer")
+st.caption(
+    "Given a yearly budget, which combination of changes cuts the most CO₂? "
+    "This is a 0/1 knapsack problem — cost is the weight, CO₂ saved is the value."
+)
+
+opt_col1, opt_col2 = st.columns([2, 1])
+with opt_col1:
+    budget = st.slider(
+        "Annual budget (₹)", min_value=1_000, max_value=150_000,
+        value=30_000, step=1_000, key="budget_input",
+    )
+with opt_col2:
+    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+    optimize_button = st.button("⚙️ Build my plan", use_container_width=True)
+
+if optimize_button:
+    scored = optimizer.build_actions(BASELINE_KG, USER_INPUTS)
+
+    if not scored:
+        st.warning(
+            "No applicable actions — enter your details above first. "
+            "Actions only appear where they would actually reduce your emissions."
+        )
+    else:
+        solutions = {
+            "Greedy": optimizer.solve_greedy(scored, budget),
+            "DP (exact)": optimizer.solve_dp(scored, budget),
+            "DP + groups": optimizer.solve_dp_grouped(scored, budget),
+        }
+
+        st.markdown("**How the three solvers compare at this budget**")
+        cmp1, cmp2, cmp3 = st.columns(3)
+        greedy_saving = solutions["Greedy"].total_saving
+        for col, (label, sol) in zip((cmp1, cmp2, cmp3), solutions.items()):
+            delta = None
+            if label != "Greedy" and greedy_saving > 0:
+                pct = (sol.total_saving - greedy_saving) / greedy_saving * 100
+                delta = f"{pct:+.1f}% vs greedy"
+            col.metric(label, f"{sol.total_saving/1000:.2f} t/yr", delta,
+                       delta_color="off" if label == "DP + groups" else "normal")
+
+        st.caption(
+            "Greedy and DP (exact) optimise the same objective, so any gap between them "
+            "is pure algorithmic loss. **DP + groups optimises a different, more honest "
+            "objective** — its lower number is a corrected estimate, not a worse plan."
+        )
+
+        choice = st.radio(
+            "Show plan from:", list(solutions.keys()),
+            index=2, horizontal=True, key="solver_choice",
+        )
+        result = solutions[choice]
+
+        r1, r2, r3 = st.columns(3)
+        r1.metric("CO₂ saved", f"{result.total_saving/1000:.2f} t/yr")
+        r2.metric("Spent", f"₹{result.total_cost:,.0f}", f"₹{result.leftover:,.0f} unspent")
+        r3.metric("Actions chosen", f"{len(result.chosen)} of {len(scored)}")
+
+        st.markdown(f"**Recommended plan — {result.method}**")
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Action": s.name,
+                    "Category": s.category,
+                    "Cost (₹/yr)": round(s.cost),
+                    "Saves (kg CO₂/yr)": round(s.saving, 1),
+                    "kg per ₹": round(s.density, 4),
+                }
+                for s in result.chosen
+            ]),
+            use_container_width=True, hide_index=True,
+        )
+
+        # ── Before / after ────────────────────────────────────────────
+        after_kg = optimizer.projected_baseline(BASELINE_KG, result)
+        saved_by_cat = optimizer.category_savings(result)
+        touched = sorted(
+            [c for c in BASELINE_KG if saved_by_cat.get(c, 0) > 0],
+            key=lambda c: -BASELINE_KG[c],
+        )
+
+        if touched:
+            st.markdown("**Before vs after, by category**")
+            ba_df = pd.DataFrame({
+                "Category": touched * 2,
+                "Emissions (t CO₂/yr)": (
+                    [BASELINE_KG[c] / 1000 for c in touched]
+                    + [after_kg[c] / 1000 for c in touched]
+                ),
+                "Scenario": ["Before"] * len(touched) + ["After plan"] * len(touched),
+            })
+            ba_fig = px.bar(
+                ba_df, x="Category", y="Emissions (t CO₂/yr)",
+                color="Scenario", barmode="group",
+                color_discrete_map={"Before": "#EF5350", "After plan": "#2E7D32"},
+                title="Emissions before vs after your reduction plan",
+            )
+            ba_fig.update_layout(margin=dict(t=50, b=0, l=0, r=0), height=380)
+            st.plotly_chart(ba_fig, use_container_width=True)
+
+            base_total = sum(BASELINE_KG.values())
+            after_total = sum(after_kg.values())
+            t1, t2, t3 = st.columns(3)
+            t1.metric("Total before", f"{base_total/1000:.2f} t/yr")
+            t2.metric("Total after", f"{after_total/1000:.2f} t/yr",
+                      f"-{(base_total - after_total)/1000:.2f} t")
+            t3.metric(
+                "Reduction",
+                f"{(base_total - after_total)/base_total*100:.1f}%" if base_total else "—",
+            )
+            st.caption(
+                "Only categories the plan changes are shown. Untouched categories are "
+                "unaffected and would appear as two identical bars."
+            )
+
+        with st.expander("Show the full ranking the greedy algorithm used"):
+            st.caption(
+                "Every applicable action, sorted by CO₂ saved per rupee. "
+                "Greedy walks this list top to bottom and takes anything that still fits."
+            )
+            ranking = optimizer.greedy_ranking(scored)
+            chosen_names = {s.name for s in result.chosen}
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "": "✅" if s.name in chosen_names else "—",
+                        "Action": s.name,
+                        "Category": s.category,
+                        "Cost (₹/yr)": round(s.cost),
+                        "Saves (kg CO₂/yr)": round(s.saving, 1),
+                        "kg per ₹": round(s.density, 4),
+                    }
+                    for s in ranking
+                ]),
+                use_container_width=True, hide_index=True,
+            )
+
+        # Sanity check: does the plan claim to save more than a category emits?
+        claimed = {}
+        for s in result.chosen:
+            claimed[s.category] = claimed.get(s.category, 0) + s.saving
+        overshoot = {
+            cat: (amt, BASELINE_KG.get(cat, 0))
+            for cat, amt in claimed.items()
+            if amt > BASELINE_KG.get(cat, 0) + 1e-9
+        }
+        if overshoot:
+            lines = "\n".join(
+                f"- **{cat}**: plan claims {amt:,.0f} kg saved, but you only emit "
+                f"{base:,.0f} kg there."
+                for cat, (amt, base) in overshoot.items()
+            )
+            st.error(
+                "**This plan is double-counting.** The optimizer treats every action as "
+                "independent and adds their savings together, but some of these actions "
+                "overlap — they attack the same emissions.\n\n"
+                f"{lines}\n\nThis is a modelling flaw, not an arithmetic one — the "
+                "algorithm maximised the sum correctly, but the sum was the wrong thing "
+                "to maximise. Switch to **DP + groups** above to see it corrected."
+            )
+        elif choice == "DP + groups":
+            st.success(
+                "**No category over-claims.** Actions that attack the same flow of "
+                "emissions are now treated as alternatives, so at most one is chosen "
+                "from each. Note this check is a smoke alarm, not a proof: overlap that "
+                "stays under a category's baseline would still slip through."
+            )
+
+# ── Data provenance ───────────────────────────────────────────────────────────
+st.markdown("<hr style='border:1px solid #c8e6c9'>", unsafe_allow_html=True)
+with st.expander("📚 Where these numbers come from — sources & limitations"):
+    st.caption(
+        "Every factor below is traceable. Confidence is **HIGH** where quoted from a "
+        "primary source, **MEDIUM** where borrowed from another country's dataset, and "
+        "**LOW** where derived by hand from cited inputs plus stated assumptions."
+    )
+
+    conf_icon = {"HIGH": "🟢", "MEDIUM": "🟡", "LOW": "🔴"}
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "": conf_icon.get(f.confidence, ""),
+                "Factor": label,
+                "Value": f"{f.value:,.5g}",
+                "Unit": f.unit,
+                "Confidence": f.confidence,
+                "Source": f.source,
+            }
+            for label, f in ef.ALL_FACTORS.items()
+        ]),
+        use_container_width=True, hide_index=True,
+    )
+
+    st.markdown("**Notes on individual factors**")
+    for label, f in ef.ALL_FACTORS.items():
+        if f.note:
+            st.markdown(f"- **{label}** — {f.note}")
+
+    st.markdown("**Diet data — the weakest transfer**")
+    st.info(ef.DIET_LIMITATION)
+
+    st.markdown("**What this calculator does not capture**")
+    for lim in ef.GENERAL_LIMITATIONS:
+        st.markdown(f"- {lim}")
+
+    st.warning(
+        "**Note on the India averages** shown throughout this page: those comparison "
+        "figures have not yet been re-sourced and predate the corrected factors above. "
+        "Treat the 'vs India average' deltas as indicative only until they are updated."
+    )
+
 # ── PDF Download ──────────────────────────────────────────────────────────────
 if generate_report_button:
     with st.spinner("🛠️ Building your personalised PDF report..."):
+        # Recompute the plan here rather than reading it from the optimizer
+        # section above, so the report is complete whether or not the user
+        # pressed "Build my plan" first. The grouped solver is used because it
+        # is the one that does not double-count overlapping actions.
+        pdf_scored = optimizer.build_actions(BASELINE_KG, USER_INPUTS)
+        pdf_plan = (
+            optimizer.solve_dp_grouped(pdf_scored, budget) if pdf_scored else None
+        )
+
         pdf_bytes = generate_pdf(
             name, df, total_emissions,
             transportation_emissions, electricity_emissions, diet_emissions,
             waste_emissions, water_emissions, appliances_emissions, housing_emissions,
-            fuel_type, diet, house_material
+            fuel_type, diet, house_material,
+            plan=pdf_plan, budget=budget,
         )
 
     st.success("✅ Report ready! Click below to download.")
