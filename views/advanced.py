@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
@@ -44,16 +45,12 @@ EMISSION_FACTORS = {
     "Housing": {k: f.value for k, f in ef.HOUSING_PER_SQFT_YEAR.items()},
 }
 
-INDIA_AVERAGES = {
-    "Transportation": 0.62,
-    "Electricity": 1.97,
-    "Diet": 0.82,
-    "Waste": 0.06,
-    "Water": 0.01,
-    "Appliances": 0.01,
-    "Housing": 0.15,
-    "Total": 3.64,
-}
+# Computed from a documented average-Indian profile using the SAME emission
+# factors as the user's own result, so every "vs India average" delta compares
+# like with like. See emission_factors.AVERAGE_INDIAN_PROFILE for the profile
+# and its sources. The previous hardcoded figures had no provenance and were
+# derived with the old, unit-buggy factors.
+INDIA_AVERAGES = ef.INDIA_AVERAGES
 
 CATEGORY_COLORS = {
     "Transportation": "#4FC3F7",
@@ -80,10 +77,15 @@ with col_name:
     name = st.text_input("👤 Your name:", placeholder="e.g. Arjun")
 
 # ── Info Dialogs ─────────────────────────────────────────────────────────────
+# The reference values quoted in these dialogs come from the same profile used
+# to compute the "India average" comparisons, so guidance and comparison can
+# never disagree.
+_AVG = ef.AVERAGE_INDIAN_PROFILE
+
 @st.dialog("Daily Commute Info")
 def commute_info():
     st.write("The daily distance you travel, usually to and from work or school.")
-    st.write("🇮🇳 India Average: **15 km/day**")
+    st.write(f"🇮🇳 India Average: **{_AVG['distance']} km/day**")
 
 @st.dialog("Fuel Type Info")
 def fuel_info():
@@ -92,12 +94,17 @@ def fuel_info():
 @st.dialog("Electricity Info")
 def electricity_info():
     st.write("Total electricity consumed per month, measured in kilowatt-hours (kWh).")
-    st.write("🇮🇳 India Average: **200 kWh/month**")
+    st.write(f"🇮🇳 India Average: **{_AVG['electricity']} kWh/month**")
+    st.caption(ef.AVERAGE_PROFILE_SOURCES["electricity"])
 
 @st.dialog("Appliances Info")
 def appliances_info():
     st.write("Number of major appliances used per year (fans, fridges, washing machines, etc).")
-    st.write("🇮🇳 India Average: **10 appliances**")
+    st.write(f"🇮🇳 India Average: **{_AVG['appliances']} appliances**")
+    st.caption(
+        "Counts manufacturing carbon only — the electricity these appliances use "
+        "is already captured by your kWh figure."
+    )
 
 @st.dialog("Diet Info")
 def diet_info():
@@ -106,17 +113,19 @@ def diet_info():
 @st.dialog("Meals Info")
 def meals_info():
     st.write("Average number of meals consumed per day.")
-    st.write("🇮🇳 India Average: **3 meals/day**")
+    st.write(f"🇮🇳 India Average: **{_AVG['meals']} meals/day**")
 
 @st.dialog("Water Info")
 def water_info():
     st.write("Your daily water usage in liters.")
-    st.write("🇮🇳 India Average: **135 liters/day**")
+    st.write(f"🇮🇳 India Average: **{_AVG['water']} liters/day**")
+    st.caption(ef.AVERAGE_PROFILE_SOURCES["water"])
 
 @st.dialog("Waste Info")
 def waste_info():
     st.write("Amount of waste generated per week in kilograms.")
-    st.write("🇮🇳 India Average: **5 kg/week**")
+    st.write(f"🇮🇳 India Average: **{_AVG['waste']} kg/week**")
+    st.caption(ef.AVERAGE_PROFILE_SOURCES["waste"])
 
 @st.dialog("Housing Material Info")
 def housing_info():
@@ -191,38 +200,6 @@ with col5:
     waste = st.number_input("Waste (kg)", min_value=0, step=1, key="waste_input", label_visibility="collapsed")
 
 # ── Calculations ─────────────────────────────────────────────────────────────
-distance_yr  = distance * 365
-electricity_yr = electricity * 12
-waste_yr     = waste * 52
-water_yr     = water * 365
-
-transportation_emissions = 0 if fuel_type == "N/A" else EMISSION_FACTORS["Transportation"][fuel_type] * distance_yr
-electricity_emissions    = EMISSION_FACTORS["Energy"]["Electricity"] * electricity_yr
-# The diet factor is per DAY for a reference ~3-meal (2,000 kcal) diet, so
-# meals scales it rather than multiplying it. The old code multiplied a
-# per-meal-shaped number by meals AND by 365, which inflated diet emissions
-# roughly threefold.
-diet_emissions           = (
-    0 if diet == "N/A"
-    else EMISSION_FACTORS["Diet"][diet] * (meals / ef.DIET_REFERENCE_MEALS) * 365
-)
-waste_emissions          = EMISSION_FACTORS["Waste"] * waste_yr
-water_emissions          = EMISSION_FACTORS["Water"] * water_yr
-appliances_emissions     = EMISSION_FACTORS["Energy"]["Appliances"] * appliances
-housing_emissions        = 0 if house_material == "N/A" else EMISSION_FACTORS["Housing"][house_material] * house_size
-
-# Keep the unrounded kg/yr values — the optimizer works in kg and rounding
-# to tonnes here would throw away the precision it needs.
-BASELINE_KG = {
-    "Transportation": transportation_emissions,
-    "Electricity":    electricity_emissions,
-    "Diet":           diet_emissions,
-    "Waste":          waste_emissions,
-    "Water":          water_emissions,
-    "Appliances":     appliances_emissions,
-    "Housing":        housing_emissions,
-}
-
 USER_INPUTS = {
     "distance": distance,
     "fuel_type": fuel_type,
@@ -236,16 +213,21 @@ USER_INPUTS = {
     "waste": waste,
 }
 
+# One shared calculation for both the user's result and the India average, so
+# the two sides of every comparison can never drift apart. Kept in kg because
+# the optimizer needs the unrounded values.
+BASELINE_KG = ef.compute_baseline_kg(USER_INPUTS)
+
 def to_tonnes(e):
     return round(e / 1000, 2)
 
-transportation_emissions = to_tonnes(transportation_emissions)
-electricity_emissions    = to_tonnes(electricity_emissions)
-diet_emissions           = to_tonnes(diet_emissions)
-waste_emissions          = to_tonnes(waste_emissions)
-water_emissions          = to_tonnes(water_emissions)
-appliances_emissions     = to_tonnes(appliances_emissions)
-housing_emissions        = to_tonnes(housing_emissions)
+transportation_emissions = to_tonnes(BASELINE_KG["Transportation"])
+electricity_emissions    = to_tonnes(BASELINE_KG["Electricity"])
+diet_emissions           = to_tonnes(BASELINE_KG["Diet"])
+waste_emissions          = to_tonnes(BASELINE_KG["Waste"])
+water_emissions          = to_tonnes(BASELINE_KG["Water"])
+appliances_emissions     = to_tonnes(BASELINE_KG["Appliances"])
+housing_emissions        = to_tonnes(BASELINE_KG["Housing"])
 
 total_emissions = round(
     transportation_emissions + electricity_emissions + diet_emissions +
@@ -497,7 +479,8 @@ dial_fig = go.Figure(go.Indicator(
     mode="gauge+number+delta",
     value=total_emissions,
     delta={"reference": INDIA_AVERAGES["Total"], "valueformat": ".2f"},
-    title={"text": "Total CO₂ (tonnes/yr)<br><span style='font-size:12px'>vs India avg 3.64 t</span>"},
+    title={"text": "Total CO₂ (tonnes/yr)<br><span style='font-size:12px'>"
+                   f"vs India avg {INDIA_AVERAGES['Total']} t</span>"},
     gauge={
         "axis": {"range": [0, 30]},
         "bar": {"color": "#1B5E20"},
@@ -561,21 +544,21 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         def header(self):
             self.set_fill_color(46, 125, 50)
             self.rect(0, 0, 210, 28, "F")
-            self.set_font("Arial", "B", 18)
+            self.set_font("Helvetica", "B", 18)
             self.set_text_color(255, 255, 255)
             self.set_y(6)
             display_name = name.strip()
             title = (f"{display_name}'s Carbon Emission Report" if display_name
                      else "Your Carbon Emission Report")   # not "Your's"
-            self.cell(0, 8, title, ln=True, align="C")
-            self.set_font("Arial", "I", 10)
-            self.cell(0, 6, f"Generated on {datetime.now().strftime('%d %B %Y, %H:%M')}", ln=True, align="C")
+            self.cell(0, 8, title, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+            self.set_font("Helvetica", "I", 10)
+            self.cell(0, 6, f"Generated on {datetime.now().strftime('%d %B %Y, %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
             self.set_text_color(0, 0, 0)
             self.ln(4)
 
         def footer(self):
             self.set_y(-12)
-            self.set_font("Arial", "I", 8)
+            self.set_font("Helvetica", "I", 8)
             self.set_text_color(120, 120, 120)
             self.cell(0, 6, f"MyCarbon  |  mycarbon.streamlit.app  |  Page {self.page_no()}", align="C")
 
@@ -591,20 +574,20 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
     pdf.set_draw_color(46, 125, 50)
     pdf.set_line_width(0.5)
     pdf.rect(10, pdf.get_y(), 190, 24, "FD")
-    pdf.set_font("Arial", "B", 13)
+    pdf.set_font("Helvetica", "B", 13)
     pdf.set_text_color(27, 94, 32)
     pdf.set_x(12)
-    pdf.cell(0, 8, f"Overall Impact: {label}", ln=True)
-    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 8, f"Overall Impact: {label}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(40, 40, 40)
     pdf.set_x(12)
     pdf.multi_cell(186, 6, summary)
     pdf.ln(4)
 
     # Input summary
-    pdf.set_font("Arial", "B", 11)
+    pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(46, 125, 50)
-    pdf.cell(0, 7, "Input Summary", ln=True)
+    pdf.cell(0, 7, "Input Summary", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_draw_color(200, 230, 201)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(2)
@@ -621,22 +604,24 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         ("Water Usage",     f"{water} liters/day"),
         ("Waste Generated", f"{waste} kg/week"),
     ]
-    pdf.set_font("Arial", "", 9)
+    pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(40, 40, 40)
     col_w = 93
     for i, (label_t, val) in enumerate(inputs):
         if i % 2 == 0:
             pdf.set_x(10)
-        pdf.set_font("Arial", "B", 9)
+        pdf.set_font("Helvetica", "B", 9)
         pdf.cell(38, 6, label_t + ":", border=0)
-        pdf.set_font("Arial", "", 9)
-        pdf.cell(col_w - 38, 6, val, border=0, ln=(1 if i % 2 == 1 else 0))
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(col_w - 38, 6, val, border=0,
+                 new_x=(XPos.LMARGIN if i % 2 == 1 else XPos.RIGHT),
+                 new_y=(YPos.NEXT if i % 2 == 1 else YPos.TOP))
     pdf.ln(4)
 
     # Charts row
-    pdf.set_font("Arial", "B", 11)
+    pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(46, 125, 50)
-    pdf.cell(0, 7, "Visual Overview", ln=True)
+    pdf.cell(0, 7, "Visual Overview", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_draw_color(200, 230, 201)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(2)
@@ -650,9 +635,9 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
     pdf.add_page()
     pdf.ln(4)
 
-    pdf.set_font("Arial", "B", 13)
+    pdf.set_font("Helvetica", "B", 13)
     pdf.set_text_color(46, 125, 50)
-    pdf.cell(0, 8, "Detailed Emissions Breakdown", ln=True)
+    pdf.cell(0, 8, "Detailed Emissions Breakdown", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_draw_color(200, 230, 201)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(3)
@@ -663,9 +648,9 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
     pdf.ln(4)
 
     # Per-category detail
-    pdf.set_font("Arial", "B", 11)
+    pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(46, 125, 50)
-    pdf.cell(0, 7, "Category Analysis", ln=True)
+    pdf.cell(0, 7, "Category Analysis", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_draw_color(200, 230, 201)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(2)
@@ -680,7 +665,7 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         ("Housing",        housing_emissions,         "Building materials have embodied carbon from manufacture & transport."),
     ]
 
-    pdf.set_font("Arial", "", 9)
+    pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(40, 40, 40)
     for cat, val, note in cats:
         avg = INDIA_AVERAGES[cat]
@@ -689,13 +674,13 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         color = CATEGORY_COLORS.get(cat, "#999999")
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
         pdf.set_fill_color(r, g, b)
-        pdf.set_font("Arial", "B", 10)
+        pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(255, 255, 255)
-        pdf.cell(0, 6, f"  {cat}", fill=True, ln=True)
+        pdf.cell(0, 6, f"  {cat}", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(40, 40, 40)
-        pdf.set_font("Arial", "", 9)
-        pdf.cell(0, 5, f"   Your emissions: {val:.2f} t CO2/yr  |  India avg: {avg:.2f} t  |  {status}", ln=True)
-        pdf.set_font("Arial", "I", 8)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(0, 5, f"   Your emissions: {val:.2f} t CO2/yr  |  India avg: {avg:.2f} t  |  {status}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font("Helvetica", "I", 8)
         pdf.set_text_color(80, 80, 80)
         pdf.multi_cell(0, 5, f"   {note}")
         pdf.ln(1)
@@ -704,14 +689,14 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
     pdf.add_page()
     pdf.ln(4)
 
-    pdf.set_font("Arial", "B", 13)
+    pdf.set_font("Helvetica", "B", 13)
     pdf.set_text_color(46, 125, 50)
-    pdf.cell(0, 8, "Personalised Recommendations", ln=True)
+    pdf.cell(0, 8, "Personalised Recommendations", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_draw_color(200, 230, 201)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(3)
 
-    pdf.set_font("Arial", "", 10)
+    pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(40, 40, 40)
     pdf.multi_cell(0, 6, "Based on your inputs, here are the highest-impact changes you can make to reduce your carbon footprint:")
     pdf.ln(3)
@@ -771,13 +756,13 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         color = CATEGORY_COLORS.get(cat, "#999999")
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
         pdf.set_fill_color(r, g, b)
-        pdf.set_font("Arial", "B", 10)
+        pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(255, 255, 255)
         above = val > avg
         tag = "  ! Priority" if above else "  + On Track"
-        pdf.cell(0, 6, f"  {cat}{tag}", fill=True, ln=True)
+        pdf.cell(0, 6, f"  {cat}{tag}", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(40, 40, 40)
-        pdf.set_font("Arial", "", 9)
+        pdf.set_font("Helvetica", "", 9)
         for tip in all_tips[cat]:
             pdf.set_x(10)
             pdf.multi_cell(190, 5, clean(f"- {tip}"))
@@ -788,14 +773,14 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
     pdf.set_fill_color(232, 245, 233)
     pdf.set_draw_color(46, 125, 50)
     pdf.rect(10, pdf.get_y(), 190, 20, "FD")
-    pdf.set_font("Arial", "B", 10)
+    pdf.set_font("Helvetica", "B", 10)
     pdf.set_text_color(27, 94, 32)
     pdf.set_x(12)
-    pdf.cell(0, 7, "Your Carbon Snapshot", ln=True)
-    pdf.set_font("Arial", "", 9)
+    pdf.cell(0, 7, "Your Carbon Snapshot", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(40, 40, 40)
     pdf.set_x(12)
-    world_avg = 4.7
+    world_avg = ef.WORLD_AVERAGE_PER_CAPITA
     india_avg = INDIA_AVERAGES["Total"]
     pdf.multi_cell(186, 5,
         f"Total: {total_emissions:.2f} t CO2/yr  |  India avg: {india_avg} t  |  World avg: {world_avg} t  "
@@ -812,14 +797,14 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         pdf.add_page()
         pdf.ln(4)
 
-        pdf.set_font("Arial", "B", 13)
+        pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(46, 125, 50)
-        pdf.cell(0, 8, "Your Optimised Reduction Plan", ln=True)
+        pdf.cell(0, 8, "Your Optimised Reduction Plan", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_draw_color(200, 230, 201)
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
         pdf.ln(3)
 
-        pdf.set_font("Arial", "", 10)
+        pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(40, 40, 40)
         pdf.multi_cell(0, 6, clean(
             f"Given an annual budget of Rs {budget:,.0f}, these actions cut the most CO2. "
@@ -837,11 +822,11 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         box_y = pdf.get_y()
         pdf.rect(10, box_y, 190, 20, "FD")
         pdf.set_xy(12, box_y + 3)
-        pdf.set_font("Arial", "B", 10)
+        pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(27, 94, 32)
-        pdf.cell(0, 6, "Plan Summary", ln=True)
+        pdf.cell(0, 6, "Plan Summary", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_x(12)
-        pdf.set_font("Arial", "", 9)
+        pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(40, 40, 40)
         pdf.multi_cell(186, 5, clean(
             f"Before: {base_total/1000:.2f} t CO2/yr   |   "
@@ -852,42 +837,42 @@ def generate_pdf(name, df, total_emissions, transportation_emissions, electricit
         pdf.ln(6)
 
         # Chosen actions
-        pdf.set_font("Arial", "B", 11)
+        pdf.set_font("Helvetica", "B", 11)
         pdf.set_text_color(46, 125, 50)
-        pdf.cell(0, 7, "Recommended Actions", ln=True)
+        pdf.cell(0, 7, "Recommended Actions", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_draw_color(200, 230, 201)
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
         pdf.ln(2)
 
-        pdf.set_font("Arial", "B", 9)
+        pdf.set_font("Helvetica", "B", 9)
         pdf.set_fill_color(46, 125, 50)
         pdf.set_text_color(255, 255, 255)
         pdf.cell(88, 7, "  Action", border=0, fill=True)
         pdf.cell(34, 7, "Category", border=0, fill=True, align="C")
         pdf.cell(34, 7, "Cost (Rs/yr)", border=0, fill=True, align="C")
-        pdf.cell(34, 7, "Saves (kg/yr)", border=0, fill=True, align="C", ln=True)
+        pdf.cell(34, 7, "Saves (kg/yr)", border=0, fill=True, align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         pdf.set_text_color(40, 40, 40)
         for i, s in enumerate(sorted(plan.chosen, key=lambda a: -a.saving)):
             pdf.set_fill_color(*((245, 250, 245) if i % 2 == 0 else (255, 255, 255)))
-            pdf.set_font("Arial", "", 9)
+            pdf.set_font("Helvetica", "", 9)
             pdf.cell(88, 6, clean(f"  {s.name}"), border=0, fill=True)
             pdf.cell(34, 6, s.category, border=0, fill=True, align="C")
             pdf.cell(34, 6, f"{s.cost:,.0f}", border=0, fill=True, align="C")
-            pdf.cell(34, 6, f"{s.saving:,.0f}", border=0, fill=True, align="C", ln=True)
+            pdf.cell(34, 6, f"{s.saving:,.0f}", border=0, fill=True, align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-        pdf.set_font("Arial", "B", 9)
+        pdf.set_font("Helvetica", "B", 9)
         pdf.set_fill_color(232, 245, 233)
         pdf.cell(88, 7, "  TOTAL", border=0, fill=True)
         pdf.cell(34, 7, "", border=0, fill=True)
         pdf.cell(34, 7, f"{plan.total_cost:,.0f}", border=0, fill=True, align="C")
-        pdf.cell(34, 7, f"{plan.total_saving:,.0f}", border=0, fill=True, align="C", ln=True)
+        pdf.cell(34, 7, f"{plan.total_saving:,.0f}", border=0, fill=True, align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(5)
 
         pdf.image(ba_path, x=10, w=190)
         pdf.ln(3)
 
-        pdf.set_font("Arial", "I", 8)
+        pdf.set_font("Helvetica", "I", 8)
         pdf.set_text_color(110, 110, 110)
         pdf.multi_cell(0, 4, clean(
             "How to read this: costs are annualised, so a one-time purchase is spread "
@@ -1166,10 +1151,25 @@ with st.expander("📚 Where these numbers come from — sources & limitations")
     for lim in ef.GENERAL_LIMITATIONS:
         st.markdown(f"- {lim}")
 
-    st.warning(
-        "**Note on the India averages** shown throughout this page: those comparison "
-        "figures have not yet been re-sourced and predate the corrected factors above. "
-        "Treat the 'vs India average' deltas as indicative only until they are updated."
+    st.markdown("**What the 'India average' actually means**")
+    st.info(
+        f"The comparison figures are computed from a documented profile — a typical "
+        f"**urban, grid-connected, vehicle-owning** Indian household member — using the "
+        f"*same* emission factors as your own result, so both sides of every delta are "
+        f"calculated identically.\n\n"
+        f"This is deliberately **not** the national per-capita mean. India's actual "
+        f"per-capita CO₂ is **{ef.INDIA_NATIONAL_PER_CAPITA.value} t/yr**, well below this "
+        f"profile's **{ef.INDIA_AVERAGES['Total']} t/yr**, because a large share of Indians "
+        f"own no vehicle and use far less electricity. Comparing a commuter against that "
+        f"national mean would be misleading. {ef.INDIA_NATIONAL_PER_CAPITA.note}"
+    )
+    st.dataframe(
+        pd.DataFrame([
+            {"Input": k, "Average profile value": v,
+             "Basis": ef.AVERAGE_PROFILE_SOURCES.get(k, "Model assumption")}
+            for k, v in ef.AVERAGE_INDIAN_PROFILE.items()
+        ]),
+        use_container_width=True, hide_index=True,
     )
 
 # ── PDF Download ──────────────────────────────────────────────────────────────

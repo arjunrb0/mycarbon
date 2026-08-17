@@ -142,6 +142,12 @@ TRANSPORT_PER_KM = {
                "~45% better than a comparable petrol car",
         url="https://www.gov.uk/government/collections/government-conversion-factors-for-company-reporting",
         confidence="LOW",
+        note="The 45% improvement is an assumption, not a sourced figure, and "
+             "it varies widely: a full hybrid in stop-start city traffic beats "
+             "a comparable petrol car by far more than one on a highway, where "
+             "regenerative braking rarely engages. Mild hybrids gain much less "
+             "than full hybrids, and this single factor does not distinguish "
+             "between them.",
     ),
     "Electric": Factor(
         value=0.15 * 0.710,         # 0.107
@@ -305,6 +311,111 @@ ALL_FACTORS = {
     "Housing — Wood": HOUSING_PER_SQFT_YEAR["Wood"],
     "Appliances": APPLIANCE_EMBODIED,
 }
+
+# ── Shared baseline calculation ──────────────────────────────────────────────
+def compute_baseline_kg(inputs: dict) -> dict:
+    """Annual emissions in kg CO2e per category, from raw user inputs.
+
+    Single source of truth. The calculator page and the India-average
+    reference profile both call this, which is what guarantees that the
+    "vs India average" deltas compare like with like. Computing the two
+    sides with different code — or worse, different factors — is exactly
+    how the previous hardcoded averages drifted out of sync.
+    """
+    fuel = inputs.get("fuel_type")
+    diet = inputs.get("diet")
+    material = inputs.get("house_material")
+
+    return {
+        "Transportation": (
+            0.0 if fuel in (None, "N/A")
+            else TRANSPORT_PER_KM[fuel].value * inputs.get("distance", 0) * 365
+        ),
+        "Electricity": ELECTRICITY.value * inputs.get("electricity", 0) * 12,
+        "Diet": (
+            0.0 if diet in (None, "N/A")
+            else DIET_PER_DAY[diet].value
+            * (inputs.get("meals", 0) / DIET_REFERENCE_MEALS) * 365
+        ),
+        "Waste": WASTE.value * inputs.get("waste", 0) * 52,
+        "Water": WATER.value * inputs.get("water", 0) * 365,
+        "Appliances": APPLIANCE_EMBODIED.value * inputs.get("appliances", 0),
+        "Housing": (
+            0.0 if material in (None, "N/A")
+            else HOUSING_PER_SQFT_YEAR[material].value * inputs.get("house_size", 0)
+        ),
+    }
+
+
+# ── The comparison profile ───────────────────────────────────────────────────
+# WHAT THIS IS, AND WHAT IT IS NOT.
+#
+# This describes a typical URBAN, GRID-CONNECTED, VEHICLE-OWNING Indian
+# household member. It is deliberately NOT the national per-capita mean: a
+# large share of Indians own no vehicle and use far less electricity, so the
+# national mean is much lower. Comparing a user who commutes and runs a fridge
+# against the national mean would flatter nobody and inform no one — the
+# comparison is only useful against someone whose life resembles theirs.
+#
+# The previous hardcoded averages (total 3.64 t) had no stated provenance and
+# were computed with the old, unit-buggy factors, so every delta shown to the
+# user was comparing numbers produced two different ways.
+
+AVERAGE_INDIAN_PROFILE = {
+    "distance": 15,            # km/day round trip
+    "fuel_type": "Petrol",
+    "electricity": 98,         # kWh/month per household
+    "appliances": 10,
+    "diet": "Non-Vegetarian",  # ~70% of Indians report eating meat/fish/eggs
+    "meals": 3,
+    "house_material": "Brick",
+    "house_size": 500,         # sq ft
+    "water": 135,              # litres/day — CPHEEO urban supply norm
+    "waste": 3.15,             # kg/week (~0.45 kg/capita/day)
+}
+
+AVERAGE_PROFILE_SOURCES = {
+    "distance": "Typical Indian urban round-trip commute of ~15 km/day "
+                "(~7-8 km each way).",
+    "electricity": "98 kWh/month — average Indian household electricity "
+                   "consumption. India's all-sector per-capita consumption was "
+                   "1,460 kWh in FY 2024-25, but most of that is industry, not "
+                   "households.",
+    "diet": "Majority of Indian households report non-vegetarian diets, though "
+            "meat quantities are far lower than in the UK cohort the diet "
+            "factors come from.",
+    "water": "135 litres per capita per day is the CPHEEO design norm for "
+             "Indian urban water supply.",
+    "waste": "~0.45 kg per capita per day of municipal solid waste.",
+    "house_size": "500 sq ft, reflecting typical Indian urban dwelling size.",
+    "appliances": "10 major appliances, matching the figure already shown in "
+                  "the app's own guidance dialogs.",
+}
+
+# Computed with the SAME factors as the user's own result — tonnes CO2e/yr.
+_avg_kg = compute_baseline_kg(AVERAGE_INDIAN_PROFILE)
+INDIA_AVERAGES = {cat: round(kg / 1000, 2) for cat, kg in _avg_kg.items()}
+INDIA_AVERAGES["Total"] = round(sum(_avg_kg.values()) / 1000, 2)
+
+
+INDIA_NATIONAL_PER_CAPITA = Factor(
+    value=2.19,
+    unit="t CO2 / person / year",
+    source="India per-capita CO2 emissions, 2024",
+    url="https://ourworldindata.org/profile/co2/india",
+    confidence="HIGH",
+    note="Energy and industry CO2 only. Not directly comparable to this "
+         "calculator's total, for three reasons: (1) it is a national mean "
+         "including the very large share of people with no vehicle and minimal "
+         "electricity, whereas the profile above is urban and grid-connected; "
+         "(2) it excludes agricultural CH4 and N2O, which dominate the diet "
+         "figure here; (3) the diet factors are UK-derived and overstate Indian "
+         "diets. Expect this calculator's profile total to exceed 2.19 t, and "
+         "read the gap as a scope difference rather than a contradiction.",
+)
+
+WORLD_AVERAGE_PER_CAPITA = 4.7   # t CO2/person/yr, global mean
+
 
 GENERAL_LIMITATIONS = [
     "These are AVERAGE factors applied to an individual. Averages describe "
