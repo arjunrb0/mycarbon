@@ -1,14 +1,21 @@
+# Only this file is read by Streamlit; the duplicate config.toml that used to
+# sit in the repo root was ignored and has been removed.
+
 [theme]
-# Primary accent color for interactive elements.
-primaryColor = "#76D7C4"
+base = "light"
+primaryColor = "#1f7a4d"
+backgroundColor = "#f9f9f7"
+secondaryBackgroundColor = "#eef2ee"
+textColor = "#16201a"
+linkColor = "#1f7a4d"
+borderColor = "#e1e0d9"
+showWidgetBorder = true
+baseRadius = "0.6rem"
+buttonRadius = "0.6rem"
+font = "sans-serif"
+headingFontWeights = [700, 650, 600, 600, 600, 600]
+# Validated categorical order (colour-blind safe on adjacent pairs).
+chartCategoricalColors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 
-# Background color for the main content area.
-backgroundColor = "#F1F1F1"
-
-# Background color used for the sidebar and most interactive widgets.
-secondaryBackgroundColor = "#E0E0E0"
-
-# Color used for almost all text.
-textColor = "#2C3E50"
-
-buttonColor = "#FFB74D" 
+[client]
+toolbarMode = "minimal"

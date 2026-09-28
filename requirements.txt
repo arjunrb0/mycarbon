@@ -1,4 +1,6 @@
-streamlit>=1.25.0
+# 1.64 is the version the app and its tests were verified against; it uses
+# top navigation, st.html, segmented controls and newer theme options.
+streamlit>=1.64
 pandas
 plotly>=5.10.0
 # fpdf2, NOT the unmaintained fpdf 1.7.2. Both import as `fpdf`, but only

@@ -1,31 +1,18 @@
 import streamlit as st
 
-# Ensure this is the first Streamlit command in the script
-st.set_page_config(layout="wide", page_title="MyCarbon")
-
-# Page setup
-advanced_page = st.Page(
-    page="views/advanced.py",
-    title="Carbon Calculator",
+# Must be the first Streamlit command.
+st.set_page_config(
+    page_title="MyCarbon — carbon footprint calculator & reduction planner",
+    page_icon="assets/icon.svg",
+    layout="wide",
 )
 
-info_page = st.Page(
-    page="views/about_me.py",
-    title="About",
-    default=True,
-)
+home = st.Page("views/home.py", title="Home", icon=":material/eco:", default=True)
+calculator = st.Page("views/calculator.py", title="Calculator",
+                     icon=":material/calculate:", url_path="calculator")
+how = st.Page("views/how_it_works.py", title="How it works",
+              icon=":material/insights:", url_path="how-it-works")
 
-# Navigation Setup with sections
-pg = st.navigation(
-    {
-        "Info": [info_page],
-        "Projects": [advanced_page],
-    }
-)
-
-# Shared on all pages
-st.logo("assets/oak_logo2.png")
-st.sidebar.markdown(" Designed by Arjun Reddy for Oakridge School Project")
-
-# Run navigation
+pg = st.navigation([home, calculator, how], position="top")
+st.logo("assets/logo.svg", size="large")
 pg.run()

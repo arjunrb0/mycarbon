@@ -164,6 +164,41 @@ TRANSPORT_PER_KM = {
              "attractive than it is here. This factor falls every year as the "
              "grid decarbonises.",
     ),
+    # Two-wheelers are the most common private vehicle in India, and emit far
+    # less per km than any car. Leaving them out meant most Indian commuters
+    # could not describe their own commute at all.
+    "Two-wheeler (petrol)": Factor(
+        value=2.31 / 45.0,          # 0.051
+        unit="kg CO2 / km",
+        source="Derived: petrol combustion factor 2.31 kg CO2/litre / ~45 km/litre "
+               "real-world economy for a typical Indian commuter scooter or motorcycle",
+        url="https://theicct.org/sites/default/files/publications/fuel-consumption-2w-india-aug2021.pdf",
+        confidence="MEDIUM",
+        note="Commuter two-wheelers range from ~35 km/l (125-150cc motorcycles) "
+             "to 60+ km/l (100-110cc), so a single fleet figure is approximate.",
+    ),
+    "Two-wheeler (electric)": Factor(
+        value=0.033 * 0.710,        # 0.023
+        unit="kg CO2 / km",
+        source="Derived: 33 Wh/km average city consumption for Indian electric "
+               "scooters (LBNL, Applied Energy 2013) x CEA grid factor 0.710 kg CO2/kWh",
+        url="https://international.lbl.gov/publications/electrical-consumption-two-three-and",
+        confidence="MEDIUM",
+        note="Charging losses are not added. As with electric cars, this falls "
+             "as the grid decarbonises.",
+    ),
+}
+
+# Friendly labels for the UI. The dict keys above stay stable because saved
+# links and tests refer to them.
+VEHICLE_LABELS = {
+    "N/A": "No private vehicle",
+    "Petrol": "Car — petrol",
+    "Diesel": "Car — diesel",
+    "Hybrid": "Car — hybrid",
+    "Electric": "Car — electric",
+    "Two-wheeler (petrol)": "Two-wheeler — petrol",
+    "Two-wheeler (electric)": "Two-wheeler — electric",
 }
 
 
@@ -302,6 +337,8 @@ ALL_FACTORS = {
     "Transport — Diesel": TRANSPORT_PER_KM["Diesel"],
     "Transport — Hybrid": TRANSPORT_PER_KM["Hybrid"],
     "Transport — Electric": TRANSPORT_PER_KM["Electric"],
+    "Transport — Two-wheeler (petrol)": TRANSPORT_PER_KM["Two-wheeler (petrol)"],
+    "Transport — Two-wheeler (electric)": TRANSPORT_PER_KM["Two-wheeler (electric)"],
     "Diet — Non-Vegetarian": DIET_PER_DAY["Non-Vegetarian"],
     "Diet — Vegetarian": DIET_PER_DAY["Vegetarian"],
     "Diet — Vegan": DIET_PER_DAY["Vegan"],
@@ -326,12 +363,19 @@ def compute_baseline_kg(inputs: dict) -> dict:
     diet = inputs.get("diet")
     material = inputs.get("house_material")
 
+    # Electricity, appliances and the house itself are shared by everyone who
+    # lives there, but this is a PER-PERSON footprint. Without dividing, a
+    # family of five would each be charged the whole household's electricity
+    # bill — and the "vs India average" comparison, which is per person, would
+    # be meaningless. Water and waste are already asked for per person.
+    people = max(1.0, float(inputs.get("household_size", 1) or 1))
+
     return {
         "Transportation": (
             0.0 if fuel in (None, "N/A")
             else TRANSPORT_PER_KM[fuel].value * inputs.get("distance", 0) * 365
         ),
-        "Electricity": ELECTRICITY.value * inputs.get("electricity", 0) * 12,
+        "Electricity": ELECTRICITY.value * inputs.get("electricity", 0) * 12 / people,
         "Diet": (
             0.0 if diet in (None, "N/A")
             else DIET_PER_DAY[diet].value
@@ -339,10 +383,10 @@ def compute_baseline_kg(inputs: dict) -> dict:
         ),
         "Waste": WASTE.value * inputs.get("waste", 0) * 52,
         "Water": WATER.value * inputs.get("water", 0) * 365,
-        "Appliances": APPLIANCE_EMBODIED.value * inputs.get("appliances", 0),
+        "Appliances": APPLIANCE_EMBODIED.value * inputs.get("appliances", 0) / people,
         "Housing": (
             0.0 if material in (None, "N/A")
-            else HOUSING_PER_SQFT_YEAR[material].value * inputs.get("house_size", 0)
+            else HOUSING_PER_SQFT_YEAR[material].value * inputs.get("house_size", 0) / people
         ),
     }
 
@@ -362,8 +406,9 @@ def compute_baseline_kg(inputs: dict) -> dict:
 # user was comparing numbers produced two different ways.
 
 AVERAGE_INDIAN_PROFILE = {
+    "household_size": 4.4,     # NFHS-5 national average
     "distance": 15,            # km/day round trip
-    "fuel_type": "Petrol",
+    "fuel_type": "Two-wheeler (petrol)",
     "electricity": 98,         # kWh/month per household
     "appliances": 10,
     "diet": "Non-Vegetarian",  # ~70% of Indians report eating meat/fish/eggs
@@ -375,8 +420,14 @@ AVERAGE_INDIAN_PROFILE = {
 }
 
 AVERAGE_PROFILE_SOURCES = {
+    "household_size": "4.4 people — national average household size, National "
+                      "Family Health Survey (NFHS-5, 2019-21). Household "
+                      "electricity, appliances and floor area are divided by it.",
     "distance": "Typical Indian urban round-trip commute of ~15 km/day "
                 "(~7-8 km each way).",
+    "fuel_type": "Petrol two-wheeler — two-wheelers make up roughly three-"
+                 "quarters of India's registered vehicles, so a car would not "
+                 "represent a typical commuter.",
     "electricity": "98 kWh/month — average Indian household electricity "
                    "consumption. India's all-sector per-capita consumption was "
                    "1,460 kWh in FY 2024-25, but most of that is industry, not "
@@ -433,3 +484,76 @@ GENERAL_LIMITATIONS = [
     "India-specific equivalent was found. Each is marked MEDIUM or LOW "
     "confidence above.",
 ]
+
+
+# ── Reference targets ────────────────────────────────────────────────────────
+LIFESTYLE_TARGET_2030 = Factor(
+    value=2.5,
+    unit="t CO2e / person / year",
+    source="Hot or Cool Institute, '1.5-Degree Lifestyles' (2021) — the per-capita "
+           "lifestyle footprint consistent with the Paris Agreement's 1.5°C goal by 2030",
+    url="https://hotorcool.org/projects/1-5-degree-lifestyles/",
+    confidence="MEDIUM",
+    note="Falls to 0.7 t by 2050. It is a LIFESTYLE footprint target, which is "
+         "close in scope to what this calculator measures, unlike national "
+         "per-capita CO2 figures that include industry.",
+)
+
+
+# ── Uncertainty ──────────────────────────────────────────────────────────────
+# A footprint shown as "4.23 t" implies a precision nobody has. Every factor
+# above already carries a confidence level, so the honest thing is to show the
+# result as a range that widens where the data is weaker.
+#
+# THESE BANDS ARE A JUDGEMENT, NOT A STATISTICAL CONFIDENCE INTERVAL. They map
+# each confidence label to a relative half-width:
+#   HIGH    ±10%   quoted from a primary source (e.g. the CEA grid factor)
+#   MEDIUM  ±25%   reputable, but transferred from another country or context
+#   LOW     ±50%   derived by hand with at least one uncited assumption
+# They cover error in the emission FACTORS only. Error in what the user types
+# in (a guessed commute distance, an estimated bill) is not included.
+
+CONFIDENCE_BANDS = {"HIGH": 0.10, "MEDIUM": 0.25, "LOW": 0.50}
+
+
+def category_factors(inputs: dict) -> dict:
+    """The factor that drives each category for this user, or None if unused."""
+    fuel = inputs.get("fuel_type")
+    diet = inputs.get("diet")
+    material = inputs.get("house_material")
+    return {
+        "Transportation": TRANSPORT_PER_KM.get(fuel),
+        "Electricity": ELECTRICITY,
+        "Diet": DIET_PER_DAY.get(diet),
+        "Waste": WASTE,
+        "Water": WATER,
+        "Appliances": APPLIANCE_EMBODIED,
+        "Housing": HOUSING_PER_SQFT_YEAR.get(material),
+    }
+
+
+def baseline_range_kg(inputs: dict) -> dict:
+    """Low/high estimate per category, plus a combined range for the total.
+
+    Returns {category: (low, central, high)} with a "Total" entry.
+
+    The total is combined by ROOT-SUM-OF-SQUARES of each category's
+    half-width, which assumes the category errors are independent: the grid
+    factor being high tells you nothing about the diet factor being high.
+    Simply adding the half-widths would assume every factor is wrong in the
+    same direction at once, which overstates the spread.
+    """
+    central = compute_baseline_kg(inputs)
+    factors = category_factors(inputs)
+    out, sq_sum = {}, 0.0
+    for cat, value in central.items():
+        f = factors.get(cat)
+        band = CONFIDENCE_BANDS[f.confidence] if f else 0.0
+        half = value * band
+        sq_sum += half ** 2
+        out[cat] = (max(0.0, value - half), value, value + half)
+
+    total = sum(central.values())
+    half_total = sq_sum ** 0.5
+    out["Total"] = (max(0.0, total - half_total), total, total + half_total)
+    return out

@@ -38,14 +38,14 @@ def test_low_confidence_factors_explain_themselves():
 
 
 # ── Unit sanity: the regression guard for the per-litre/per-km bug ───────────
-@pytest.mark.parametrize("fuel", ["Petrol", "Diesel", "Hybrid", "Electric"])
+@pytest.mark.parametrize("fuel", sorted(ef.TRANSPORT_PER_KM))
 def test_transport_factors_are_per_km_not_per_litre(fuel):
     """Any road vehicle sits well under 1 kg CO2/km.
 
     The original bug put 2.31 here. This assertion would have caught it.
     """
     value = ef.TRANSPORT_PER_KM[fuel].value
-    assert 0.02 < value < 0.5, f"{fuel}={value} is not a plausible kg CO2/km"
+    assert 0.01 < value < 0.5, f"{fuel}={value} is not a plausible kg CO2/km"
 
 
 def test_petrol_per_km_is_consistent_with_its_derivation():
@@ -160,3 +160,61 @@ def test_average_profile_exceeds_national_per_capita():
 def test_general_limitations_are_present():
     assert len(ef.GENERAL_LIMITATIONS) >= 4
     assert ef.DIET_LIMITATION.strip()
+
+
+def test_two_wheelers_emit_less_than_the_equivalent_car():
+    t = ef.TRANSPORT_PER_KM
+    assert t["Two-wheeler (petrol)"].value < t["Petrol"].value / 2
+    assert t["Two-wheeler (electric)"].value < t["Electric"].value / 2
+
+
+def test_every_vehicle_has_a_label():
+    assert set(ef.VEHICLE_LABELS) == set(ef.TRANSPORT_PER_KM) | {"N/A"}
+
+
+# ── Household size ───────────────────────────────────────────────────────────
+def test_shared_categories_are_split_by_household_size():
+    profile = dict(EMPTY, electricity=200, appliances=6, house_material="Brick",
+                   house_size=900, diet="Vegetarian", meals=3, water=100)
+    one = ef.compute_baseline_kg(profile)
+    three = ef.compute_baseline_kg(dict(profile, household_size=3))
+    for cat in ("Electricity", "Appliances", "Housing"):
+        assert three[cat] == pytest.approx(one[cat] / 3), cat
+    for cat in ("Diet", "Water"):                      # already per person
+        assert three[cat] == pytest.approx(one[cat]), cat
+
+
+def test_bad_household_size_is_treated_as_one():
+    base = ef.compute_baseline_kg(dict(EMPTY, electricity=100))
+    for bad in (0, -2, None):
+        assert ef.compute_baseline_kg(dict(EMPTY, electricity=100, household_size=bad)) == base
+
+
+# ── Uncertainty ranges ───────────────────────────────────────────────────────
+def test_ranges_bracket_the_central_estimate():
+    r = ef.baseline_range_kg(ef.AVERAGE_INDIAN_PROFILE)
+    central = ef.compute_baseline_kg(ef.AVERAGE_INDIAN_PROFILE)
+    for cat, value in central.items():
+        lo, mid, hi = r[cat]
+        assert lo <= mid <= hi and mid == pytest.approx(value)
+
+
+def test_weaker_data_gets_a_wider_range():
+    r = ef.baseline_range_kg(dict(EMPTY, electricity=100, appliances=5))
+    elec = (r["Electricity"][2] - r["Electricity"][1]) / r["Electricity"][1]    # HIGH
+    appl = (r["Appliances"][2] - r["Appliances"][1]) / r["Appliances"][1]       # LOW
+    assert appl > elec
+
+
+def test_total_range_combines_by_root_sum_of_squares():
+    """Narrower than simply adding half-widths, wider than the widest single one."""
+    r = ef.baseline_range_kg(ef.AVERAGE_INDIAN_PROFILE)
+    halves = [r[c][2] - r[c][1] for c in r if c != "Total"]
+    total_half = r["Total"][2] - r["Total"][1]
+    assert max(halves) <= total_half + 1e-9
+    assert total_half <= sum(halves) + 1e-9
+    assert total_half == pytest.approx(sum(h * h for h in halves) ** 0.5)
+
+
+def test_empty_profile_has_a_zero_range():
+    assert ef.baseline_range_kg(EMPTY)["Total"] == (0.0, 0.0, 0.0)

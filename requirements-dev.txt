@@ -1,0 +1,4 @@
+# Test-only dependencies. Deliberately NOT in requirements.txt, which Streamlit
+# Community Cloud installs for the live site.
+pytest>=8
+pypdf>=4

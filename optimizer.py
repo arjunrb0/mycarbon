@@ -62,6 +62,15 @@ class ScoredAction:
 
     action: Action
     saving: float                     # kg CO2/yr
+    cost_share: Optional[float] = None
+    """This user's share of the cost, when it differs from the catalogue price.
+
+    Household-level actions (solar, LEDs, appliances) are bought once and
+    shared by everyone in the home, so each person's share is the price
+    divided by household size — matching how their per-person emissions are
+    computed. Leaving the full price on a per-person saving would make every
+    household action look several times worse value than it is.
+    """
 
     @property
     def name(self) -> str:
@@ -73,7 +82,7 @@ class ScoredAction:
 
     @property
     def cost(self) -> float:
-        return self.action.cost
+        return self.action.cost if self.cost_share is None else self.cost_share
 
     @property
     def detail(self) -> str:
@@ -202,12 +211,21 @@ ACTION_CATALOGUE = [
         exclusive_group="commute",
     ),
     Action(
-        "Switch to an electric vehicle",
+        "Switch to an electric car",
         "Transportation",
         cost=85_000,
         saving_fn=_transport_switch("Electric"),
         detail="Price premium over petrol, annualised over ten years. On India's coal-heavy "
                "grid this saves far less than intuition suggests — see emission_factors.py.",
+        exclusive_group="commute",
+    ),
+    Action(
+        "Switch to an electric two-wheeler",
+        "Transportation",
+        cost=4_000,
+        saving_fn=_transport_switch("Two-wheeler (electric)"),
+        detail="Electric scooter price premium over a petrol one, annualised over eight "
+               "years. For a car driver this assumes the commute works on two wheels.",
         exclusive_group="commute",
     ),
     # ── Electricity ──────────────────────────────────────────────────────
@@ -312,6 +330,11 @@ ACTION_CATALOGUE = [
 ]
 
 
+# Categories whose actions are bought once for the whole home. Transport and
+# diet are personal choices, so their cost stays with the individual.
+HOUSEHOLD_CATEGORIES = {"Electricity", "Appliances", "Water", "Waste", "Housing"}
+
+
 def build_actions(baseline: dict, inputs: dict, catalogue=None) -> list:
     """Resolve the catalogue against one user's profile.
 
@@ -320,16 +343,20 @@ def build_actions(baseline: dict, inputs: dict, catalogue=None) -> list:
     someone already vegetarian — are dropped rather than offered at zero value.
     """
     catalogue = ACTION_CATALOGUE if catalogue is None else catalogue
+    people = max(1.0, float(inputs.get("household_size", 1) or 1))
     scored = []
     for action in catalogue:
         saving = action.saving(baseline, inputs)
         if saving > 0 and action.cost > 0:
-            scored.append(ScoredAction(action=action, saving=saving))
+            share = (action.cost / people
+                     if action.category in HOUSEHOLD_CATEGORIES else None)
+            scored.append(ScoredAction(action=action, saving=saving, cost_share=share))
     return scored
 
 
 # ── Greedy solver ────────────────────────────────────────────────────────────
-def solve_greedy(scored_actions: list, budget: float) -> Solution:
+def solve_greedy(scored_actions: list, budget: float,
+                 respect_groups: bool = False) -> Solution:
     """Rank by CO2 saved per rupee, then take everything that still fits.
 
     O(n log n), dominated by the sort.
@@ -337,18 +364,28 @@ def solve_greedy(scored_actions: list, budget: float) -> Solution:
     Note the 'still fits' rather than 'stop at the first that does not fit'.
     Skipping an unaffordable item and carrying on is never worse and is often
     better — it lets cheap high-density items backfill the leftover budget.
+
+    respect_groups=True also skips any action whose exclusive group is already
+    taken. That puts greedy on the same, corrected objective as
+    solve_dp_grouped, so comparing the two isolates the ALGORITHM's loss
+    rather than mixing it up with the double-counting bug.
     """
     ranked = sorted(
         scored_actions,
         key=lambda s: (-s.density, -s.saving, s.name),   # deterministic ties
     )
 
-    chosen, spent, saved = [], 0.0, 0.0
+    chosen, spent, saved, taken = [], 0.0, 0.0, set()
     for item in ranked:
+        group = item.exclusive_group if respect_groups else None
+        if group is not None and group in taken:
+            continue
         if spent + item.cost <= budget:
             chosen.append(item)
             spent += item.cost
             saved += item.saving
+            if group is not None:
+                taken.add(group)
 
     return Solution(
         method="Greedy (CO₂ per rupee)",
@@ -403,15 +440,17 @@ def solve_greedy_half_approx(scored_actions: list, budget: float) -> Solution:
 # by ten. This is why 0/1 knapsack stays NP-hard despite having a "fast" DP.
 #
 # Rupee budgets are large (₹150,000), so we discretise to units of GRANULARITY
-# rupees. At ₹500 that turns a 150,000-column table into a 300-column one — a
-# 500x saving — and since every cost in the catalogue is already a multiple of
-# ₹500, the answer stays exact for this data.
+# rupees. At ₹100 that turns a 150,000-column table into a 1,500-column one — a
+# 100x saving. Catalogue prices are multiples of ₹500, so the answer is exact
+# for a one-person household; household shares (price / household size) are
+# not round numbers, and rounding them up to the next ₹100 can very
+# occasionally miss a plan that would just have fit.
 #
 # Rounding direction matters: costs round UP and the budget rounds DOWN, so a
 # plan the DP calls affordable is always genuinely affordable. Erring the other
 # way could return a plan the user cannot pay for.
 
-GRANULARITY = 500
+GRANULARITY = 100
 
 
 def _discretise(scored_actions: list, budget: float, granularity: int):
@@ -497,15 +536,39 @@ def solve_dp_grouped(scored_actions: list, budget: float,
     """
     n = len(scored_actions)
     weights, capacity = _discretise(scored_actions, budget, granularity)
-    values = [s.saving for s in scored_actions]
 
     if n == 0 or capacity <= 0:
         return Solution(method="DP + exclusivity groups (exact)", budget=budget)
 
-    # Bucket action indices into groups, preserving a deterministic order.
+    table = _grouped_table(scored_actions, weights, capacity)
+    chosen = _backtrack(scored_actions, weights, table, capacity)
+    return Solution(
+        method="DP + exclusivity groups (exact)",
+        chosen=chosen,
+        total_saving=sum(s.saving for s in chosen),
+        total_cost=sum(s.cost for s in chosen),
+        budget=budget,
+    )
+
+
+def _grouped_table(scored_actions: list, weights: list, capacity: int,
+                   use_groups: bool = True):
+    """Build the multiple-choice knapsack table once, for every budget up to
+    `capacity`. Returns (dp, pick).
+
+    The bottom row, dp[-1][c], is the best saving achievable within budget c
+    for EVERY c at once. That is what makes the frontier and target mode
+    cheap: one table answers every budget question, rather than re-solving
+    the problem from scratch for each one.
+
+    With use_groups=False every action becomes its own group, which is
+    exactly plain 0/1 knapsack — used to draw the naive curve for comparison.
+    """
+    values = [s.saving for s in scored_actions]
+
     groups, order = {}, []
     for idx, s in enumerate(scored_actions):
-        key = s.exclusive_group or f"__solo_{idx}"
+        key = (s.exclusive_group if use_groups else None) or f"__solo_{idx}"
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -518,7 +581,7 @@ def solve_dp_grouped(scored_actions: list, budget: float,
 
     for g in range(1, g_count + 1):
         members = groups[order[g - 1]]
-        prev, row = dp[g - 1], dp[g]
+        prev, row, prow = dp[g - 1], dp[g], pick[g]
         for c in range(capacity + 1):
             best, best_idx = prev[c], None          # take nothing from group
             for j in members:
@@ -527,23 +590,92 @@ def solve_dp_grouped(scored_actions: list, budget: float,
                     if take > best:
                         best, best_idx = take, j
             row[c] = best
-            pick[g][c] = best_idx
+            prow[c] = best_idx
+    return dp, pick
 
-    chosen, c = [], capacity
-    for g in range(g_count, 0, -1):
+
+def _backtrack(scored_actions, weights, table, c):
+    """Recover the chosen actions for budget column c."""
+    _, pick = table
+    chosen = []
+    for g in range(len(pick) - 1, 0, -1):
         j = pick[g][c]
         if j is not None:
             chosen.append(scored_actions[j])
             c -= weights[j]
     chosen.reverse()
+    return chosen
 
-    return Solution(
-        method="DP + exclusivity groups (exact)",
-        chosen=chosen,
-        total_saving=sum(s.saving for s in chosen),
-        total_cost=sum(s.cost for s in chosen),
-        budget=budget,
-    )
+
+def optimal_frontier(scored_actions: list, max_budget: float, step: float = 1_000,
+                     granularity: int = GRANULARITY, use_groups: bool = True) -> list:
+    """The best achievable saving at every budget from 0 to max_budget.
+
+    Returns [(budget, kg_saved), ...]. Plotted, this is the curve of
+    diminishing returns: the first few thousand rupees buy the cheap,
+    high-impact actions, and each extra rupee after that buys less.
+    """
+    weights, capacity = _discretise(scored_actions, max_budget, granularity)
+    if not scored_actions or capacity <= 0:
+        return [(0.0, 0.0)]
+    dp, _ = _grouped_table(scored_actions, weights, capacity, use_groups)
+    last = dp[-1]
+    points, b = [], 0.0
+    while b <= max_budget + 1e-9:
+        points.append((b, last[int(b // granularity)]))
+        b += step
+    return points
+
+
+def greedy_frontier(scored_actions: list, max_budget: float, step: float = 1_000,
+                    respect_groups: bool = True) -> list:
+    """Greedy's saving at every budget, for plotting against the optimum."""
+    points, b = [], 0.0
+    while b <= max_budget + 1e-9:
+        points.append((b, solve_greedy(scored_actions, b, respect_groups).total_saving))
+        b += step
+    return points
+
+
+def solve_min_cost_for_target(scored_actions: list, target_kg: float,
+                              granularity: int = GRANULARITY):
+    """The cheapest plan that saves at least target_kg per year.
+
+    This is the problem turned inside out. Instead of "most CO2 for my
+    budget" it asks "least money for my goal":
+
+        minimise  sum(c_i x_i)   subject to   sum(s_i x_i) >= target
+
+    It needs no new algorithm. dp[-1][c] is the best saving within budget c,
+    and it can only rise as c rises (a bigger budget never forces a worse
+    plan). So the cheapest budget that reaches the target is simply the
+    FIRST column where the bottom row crosses it — found by scanning the same
+    table the budget mode builds.
+
+    Returns (solution, max_achievable_kg). solution is None when even taking
+    every useful action cannot reach the target.
+    """
+    total_cost = sum(s.cost for s in scored_actions)
+    weights, capacity = _discretise(scored_actions, total_cost + granularity, granularity)
+    if not scored_actions or capacity <= 0:
+        return None, 0.0
+    table = _grouped_table(scored_actions, weights, capacity)
+    last = table[0][-1]
+    max_kg = last[capacity]
+    if target_kg <= 0:
+        return Solution(method="Cheapest plan for target", budget=0.0), max_kg
+
+    for c in range(capacity + 1):
+        if last[c] >= target_kg - 1e-9:
+            chosen = _backtrack(scored_actions, weights, table, c)
+            return Solution(
+                method="Cheapest plan for target",
+                chosen=chosen,
+                total_saving=sum(s.saving for s in chosen),
+                total_cost=sum(s.cost for s in chosen),
+                budget=c * granularity,
+            ), max_kg
+    return None, max_kg
 
 
 # ── Reporting helpers ────────────────────────────────────────────────────────

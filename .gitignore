@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Local preview config (contains machine-specific paths)
+.claude/launch.json
+.pytest_cache/

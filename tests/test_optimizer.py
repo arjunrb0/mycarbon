@@ -55,7 +55,9 @@ def test_build_actions_produces_applicable_actions(actions):
 def test_ev_dropped_for_someone_already_driving_electric():
     profile = dict(HEAVY_PROFILE, fuel_type="Electric")
     scored = opt.build_actions(ef.compute_baseline_kg(profile), profile)
-    assert not any("electric vehicle" in s.name.lower() for s in scored)
+    names = [s.name.lower() for s in scored]
+    assert any("electric two-wheeler" in n for n in names), "sanity: commute actions present"
+    assert not any("electric car" in n for n in names)
 
 
 def test_diet_actions_dropped_for_existing_vegan():
@@ -294,3 +296,89 @@ def test_empty_profile_yields_no_actions():
 def test_leftover_is_budget_minus_spend(actions):
     sol = opt.solve_dp(actions, 33_000)
     assert sol.leftover == pytest.approx(33_000 - sol.total_cost)
+
+
+# ── Two-wheelers and household cost sharing ─────────────────────────────────
+def test_electric_two_wheeler_offered_to_petrol_riders_not_electric_ones():
+    for fuel, expected in [("Petrol", True), ("Two-wheeler (petrol)", True),
+                           ("Two-wheeler (electric)", False)]:
+        profile = dict(HEAVY_PROFILE, fuel_type=fuel)
+        scored = opt.build_actions(ef.compute_baseline_kg(profile), profile)
+        offered = any(s.name == "Switch to an electric two-wheeler" for s in scored)
+        assert offered is expected, fuel
+
+
+def test_electric_car_not_offered_to_two_wheeler_riders():
+    """An electric car emits MORE per km than a petrol scooter."""
+    profile = dict(HEAVY_PROFILE, fuel_type="Two-wheeler (petrol)")
+    scored = opt.build_actions(ef.compute_baseline_kg(profile), profile)
+    assert not any(s.name == "Switch to an electric car" for s in scored)
+
+
+def test_household_actions_are_split_but_personal_ones_are_not():
+    profile = dict(HEAVY_PROFILE, household_size=4)
+    scored = {s.name: s for s in opt.build_actions(ef.compute_baseline_kg(profile), profile)}
+    assert scored["Install 1 kW rooftop solar"].cost == pytest.approx(18_000 / 4)
+    assert scored["Carpool with one other person"].cost == 2_000
+    assert scored["Switch to a vegan diet"].cost == 6_000
+
+
+# ── Frontier ─────────────────────────────────────────────────────────────────
+def test_frontier_matches_individual_solves(actions):
+    frontier = dict(opt.optimal_frontier(actions, 60_000, step=5_000))
+    for budget, saving in frontier.items():
+        assert saving == pytest.approx(opt.solve_dp_grouped(actions, budget).total_saving)
+
+
+def test_frontier_never_goes_down(actions):
+    values = [kg for _, kg in opt.optimal_frontier(actions, 150_000)]
+    assert all(b >= a - 1e-9 for a, b in zip(values, values[1:]))
+
+
+def test_group_aware_greedy_respects_groups_and_never_beats_optimal(actions):
+    for budget in range(0, 150_001, 5_000):
+        g = opt.solve_greedy(actions, budget, respect_groups=True)
+        groups = [s.exclusive_group for s in g.chosen if s.exclusive_group]
+        assert len(groups) == len(set(groups))
+        assert g.total_saving <= opt.solve_dp_grouped(actions, budget).total_saving + 1e-9
+
+
+# ── Target mode: cheapest plan reaching a goal ───────────────────────────────
+def _brute_min_cost(items, target):
+    best = None
+    for mask in range(1 << len(items)):
+        chosen = [items[i] for i in range(len(items)) if mask >> i & 1]
+        if sum(s.saving for s in chosen) >= target - 1e-9:
+            cost = sum(s.cost for s in chosen)
+            best = cost if best is None else min(best, cost)
+    return best
+
+
+def test_min_cost_for_target_matches_brute_force():
+    rng = random.Random(7)
+    for trial in range(50):
+        items = [make_action(f"i{j}", cost=rng.randrange(1, 30),
+                             saving=rng.uniform(1, 50)) for j in range(rng.randint(1, 10))]
+        target = rng.uniform(0, sum(s.saving for s in items) * 1.1)
+        plan, max_kg = opt.solve_min_cost_for_target(items, target, granularity=1)
+        expected = _brute_min_cost(items, target)
+        if expected is None:
+            assert plan is None, f"trial {trial}"
+            assert max_kg == pytest.approx(sum(s.saving for s in items))
+        else:
+            assert plan is not None, f"trial {trial}"
+            assert plan.total_cost == pytest.approx(expected), f"trial {trial}"
+            assert plan.total_saving >= target - 1e-9
+
+
+def test_min_cost_for_target_respects_groups(baseline, actions):
+    plan, _ = opt.solve_min_cost_for_target(actions, 0.5 * sum(baseline.values()))
+    groups = [s.exclusive_group for s in plan.chosen if s.exclusive_group]
+    assert len(groups) == len(set(groups))
+
+
+def test_unreachable_target_reports_the_best_possible(baseline, actions):
+    plan, max_kg = opt.solve_min_cost_for_target(actions, 10 * sum(baseline.values()))
+    assert plan is None
+    assert max_kg == pytest.approx(
+        opt.solve_dp_grouped(actions, sum(s.cost for s in actions)).total_saving)

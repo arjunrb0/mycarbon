@@ -1,31 +1,44 @@
-# MyCarbon — Personal Carbon Footprint Calculator & Reduction Optimizer
+# MyCarbon — Carbon Footprint Calculator & Reduction Planner
 
-A Streamlit web application that estimates an individual's annual CO₂
-footprint from their lifestyle, then uses **combinatorial optimization** to
-recommend which reduction actions to take under a fixed budget.
+[![tests](https://github.com/arjunrb0/mycarbon/actions/workflows/tests.yml/badge.svg)](https://github.com/arjunrb0/mycarbon/actions/workflows/tests.yml)
+
+A web app that estimates a person's yearly carbon footprint from how they live,
+using Indian data wherever it exists, and then uses **combinatorial
+optimization** to find the combination of changes that saves the most CO₂ for
+the money they're willing to spend.
 
 🌐 **Live:** https://mycarbon.streamlit.app
 
-| Tool / Language | Purpose |
-| --------------- | ------- |
-| Python | Calculation logic, optimization algorithms |
-| Streamlit | User interface and web deployment |
+| Tool | Purpose |
+| --- | --- |
+| Python | Calculation logic and optimization algorithms |
+| Streamlit | Interface and deployment |
 | Plotly / Matplotlib | On-screen charts and PDF figures |
-| fpdf2 | Multi-page PDF report generation |
-| pytest | Test suite, including a brute-force reference solver |
-| GitHub | Version control |
+| fpdf2 | PDF report |
+| pytest + GitHub Actions | 120 tests on every push, including a brute-force reference solver and end-to-end tests of the app |
 
 ---
 
 ## What it does
 
-1. **Estimates** annual emissions across seven categories — transportation,
-   electricity, diet, housing, waste, water and appliances — from user inputs.
-2. **Compares** the result against a documented average-Indian profile.
-3. **Optimises** a reduction plan: given a yearly rupee budget, it selects the
-   combination of actions that cuts the most CO₂.
-4. **Reports** everything as an on-screen dashboard and a downloadable
-   multi-page PDF.
+- **Live footprint** across seven categories that updates as you type. There's no
+  Calculate button, so nothing disappears when you touch another control.
+- **Honest numbers.** Every emission factor is traced to a source and rated for
+  reliability, and the result is shown as a likely range, not a falsely precise
+  single number.
+- **Fair comparisons.** You're compared with a typical urban Indian computed by
+  the same code, and with the 2.5 t per-person level for the 1.5°C goal by 2030.
+- **A reduction planner** with two modes: *spend a set budget* (most CO₂ for
+  your money) or *reach a target* (cheapest way to cut X%).
+- **Algorithm comparison** that plots the exact solver against the greedy
+  shortcut for your own details.
+- **PDF report and share links.** Links reopen the calculator with your details
+  filled in, and never include your name.
+- **"Try an example"** fills in a realistic household, so a first visitor sees
+  every feature at once.
+- A **How it works** page that walks through the algorithm with examples
+  computed live by the same code.
+- Works on phones.
 
 ---
 
@@ -73,6 +86,8 @@ to public transport saves a 40 km/day commuter far more than a 4 km/day one.
 | `solve_greedy_half_approx` | O(n log n) | Within a factor of 2 of optimal |
 | `solve_dp` | O(n·B) | Exact |
 | `solve_dp_grouped` | O(n·B) | Exact, and respects mutual exclusivity |
+| `optimal_frontier` | O(n·B), once | The best saving at **every** budget from one table |
+| `solve_min_cost_for_target` | O(n·B), once | Cheapest plan reaching a CO₂ goal |
 
 **Greedy** ranks by CO₂-saved-per-rupee and takes whatever fits. It is provably
 optimal for the *fractional* problem (by an exchange argument), when all costs
@@ -95,7 +110,26 @@ small, with costs rounded **up** and the budget **down** so any plan reported
 as affordable genuinely is.
 
 On the real action catalogue, greedy falls short of the optimum at roughly
-**a third of budgets tested**.
+**a third of budgets tested**. When greedy is also made to respect the
+exclusivity groups described below, it gets worse, not better: it locks in
+the first commute change it meets (carpooling, the best value per rupee) and
+can then never take the electric two-wheeler, which saves far more. The
+calculator plots both curves for the user's own details.
+
+### One table answers every budget — and the reverse question
+
+The bottom row of the DP table is the best saving at *every* budget up to the
+maximum, so one table draws the whole diminishing-returns curve.
+
+The same row answers the inverse problem for free. "What's the cheapest way to
+save X kg?" is
+
+$$\text{minimize} \ \sum_i c_i x_i \quad \text{subject to} \ \sum_i s_i x_i \ge X$$
+
+and because the best saving can only rise as the budget rises, the answer is
+simply the first column where the bottom row reaches X. The calculator's
+**Reach a target** mode uses exactly this, and the tests check it against
+brute force.
 
 ### The interesting bug: optimising the wrong thing
 
@@ -114,6 +148,8 @@ recycling (dry waste) genuinely add up, so they stay independent.
 
 Correcting this made the headline number **50% smaller**. That's the
 improvement: the first plan was impossible, the second is achievable.
+
+---
 
 ---
 
@@ -143,8 +179,8 @@ Fixing these took the demo profile from 40.9 t to **8.42 t CO₂/yr**.
 
 **On India's coal-heavy grid, an EV is only ~31% cleaner than petrol per km —
 not the ~95% the original factors implied.** An EV is only as clean as the
-electricity charging it. This moved "switch to an EV" from 6th to 13th in the
-optimizer's ranking, and promoted rooftop solar and carpooling — which is the
+electricity charging it. This moved "switch to an electric car" from 6th to near the
+bottom of the optimizer's ranking (14th of 18 today), and promoted rooftop solar and carpooling — which is the
 correct answer for India. The old data was actively hiding it.
 
 ### Key sources
@@ -157,6 +193,30 @@ correct answer for India. The old data was actively hiding it.
 - **Diet:** Scarborough et al. (2014), *Climatic Change* 125:179–192.
 - **Fuel and waste:** UK DEFRA GHG conversion factors.
 - **CO₂ per capita:** Our World in Data — India, 2.19 t (2024).
+- **Two-wheelers:** ICCT two-wheeler fuel-consumption report; LBNL (2013) for
+  electric scooter consumption.
+- **Household size:** National Family Health Survey (NFHS-5, 2019-21).
+- **2030 target:** Hot or Cool Institute, *1.5-Degree Lifestyles* (2021) —
+  2.5 t CO₂e per person.
+
+### Two-wheelers and households
+
+- **Two-wheelers** are the most common private vehicle in India and emit about
+  a third as much per km as a petrol car: 2.31 kg/l ÷ ~45 km/l = **0.051 kg/km**
+  for petrol, and 33 Wh/km × the grid factor = **0.023 kg/km** for electric
+  (LBNL study of Indian EVs). The original calculator had no way to enter one.
+- **Household size** — electricity, appliances and floor area are shared, so
+  they're divided by the number of people at home (India averages 4.4, per
+  NFHS-5). Household-level changes such as rooftop solar have their cost split
+  the same way, so the plan compares a per-person saving with a per-person cost.
+
+### Results as ranges
+
+Each factor is rated High, Medium or Low confidence, mapped to ±10%, ±25% and
+±50%. The total combines those by root-sum-of-squares, which assumes errors in
+different categories are independent. These bands are a stated judgement, not a
+statistical confidence interval, and they cover the factors only — not errors
+in what the user types.
 
 ### Known limitations
 
@@ -167,9 +227,11 @@ correct answer for India. The old data was actively hiding it.
 - Air travel and consumption of goods and services are **not modelled at all**.
   Totals should be read as a lower bound.
 - Housing and water factors involve uncited assumptions, flagged `LOW`.
-- The "India average" is a documented urban, grid-connected, vehicle-owning
+- The "India average" is a documented urban, grid-connected, two-wheeler-commuting
   profile — deliberately **not** the national per-capita mean, which is much
   lower because many Indians own no vehicle.
+
+---
 
 ---
 
@@ -180,59 +242,68 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Compare the solvers from the command line:
-
-```bash
-python3 optimizer.py
-```
-
 Run the tests:
 
 ```bash
-python3 -m pytest tests/ -q
+pip install -r requirements-dev.txt
+python -m pytest tests -q
 ```
 
 ---
 
 ## Tests
 
-70 tests covering the optimizer and the emission factor data.
+120 tests, run by GitHub Actions on every push.
 
-The most important is a **property test against a brute-force reference
-solver**. Brute force enumerates all 2ⁿ subsets and is the definition of the
-correct answer, so any disagreement means the DP is wrong. It runs over 60
-randomised instances plus the real catalogue at every budget.
+- **Brute-force checks.** A reference solver tries all 2ⁿ combinations and is by
+  definition correct. The DP, the frontier, and target mode are all compared
+  against it on randomised problems. Any disagreement means the fast version is
+  wrong.
+- **Unit-range checks** on every emission factor. The worst bug in this project
+  was a per-litre value used per kilometre, and no algorithm test could catch
+  that. An assertion that road transport must fall in a sensible range per km
+  would have.
+- **End-to-end tests** drive the real app through Streamlit's test harness:
+  results surviving further interaction (the bug that motivated the redesign),
+  inputs surviving a page change, share links round-tripping, hostile links
+  being clamped rather than crashing, and the PDF being generated.
 
-The factor tests are mostly **unit-range assertions** — deliberately so. The
-worst bug in this project was dimensional, and no amount of algorithm testing
-would have caught a per-litre value used per kilometre. An assertion that road
-transport must fall between 0.02 and 0.5 kg/km would have.
-
-One of these tests found a real gap while being written: a `LOW`-confidence
-factor with no caveat documenting why.
+Writing these found real problems twice: a Low-confidence factor with no
+caveat, and a crash when a shared link produced inputs that emit nothing.
 
 ---
 
 ## Project structure
 
 ```
-app.py                       Streamlit navigation
-views/advanced.py            Calculator page, charts, PDF generation
-views/about_me.py            About page
-optimizer.py                 Knapsack model and the four solvers
-emission_factors.py          Sourced factors, shared baseline calculation
-tests/                       pytest suite
+app.py                  Navigation and page setup
+views/home.py           Landing page
+views/calculator.py     Calculator, planner, report and sharing
+views/how_it_works.py   The algorithm explained, with live examples
+emission_factors.py     Sourced factors, the shared calculation, uncertainty ranges
+optimizer.py            Knapsack model and solvers
+inputs.py               Every input defined once; share-link parsing
+insights.py             Plain-language verdicts and tips
+charts.py               Plotly charts (colour-blind-checked palette)
+report.py               PDF report
+ui.py                   Shared visual components
+tests/                  pytest suite
 ```
 
 ---
 
 ## Planned
 
-- Effort-points as an alternative to rupees, for users without a budget
-- Session saving and footprint history over time
-- Geo-aware tips based on state-level grid factors
+- **State-level grid factors.** India's regional grids were unified into one
+  national grid in 2013, and the Central Electricity Authority now publishes a
+  single all-India factor, so there's no official state-level figure to use.
+  Deriving one from each state's generation mix is possible, but that would be a
+  methodology of my own rather than a sourced number.
+- Public transport as a primary commute mode, which needs a sourced per-passenger-km
+  factor for Indian buses and metros.
+- Effort as an alternative to rupees, for people without a budget.
 - Sequential rather than independent savings (submodular optimization — a
-  materially harder problem than knapsack)
+  materially harder problem than knapsack).
 
 ---
 
