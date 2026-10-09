@@ -136,3 +136,35 @@ def test_pdf_report_is_created_and_offered():
     click(at, "Try an example")
     click(at, "Create my report")
     assert len(at.get("download_button")) == 1
+
+
+# ── Home page: optional video and write-up ──────────────────────────────────
+import sys as _sys
+_sys.path.insert(0, ROOT)
+import site_content
+
+
+def _home(monkeypatch, url):
+    monkeypatch.setattr(site_content, "VIDEO_URL", url)
+    at = AppTest.from_file(APP, default_timeout=180)
+    at.run()
+    assert not at.exception, [e.message for e in at.exception]
+    return at
+
+
+def test_home_without_a_video_shows_no_player(monkeypatch):
+    at = _home(monkeypatch, "")
+    assert len(at.get("video")) == 0
+    assert any("Start the calculator" in b.label for b in at.button)
+
+
+def test_home_with_a_video_embeds_it(monkeypatch):
+    at = _home(monkeypatch, "https://youtu.be/EXAMPLE0001")
+    assert len(at.get("video")) == 1
+
+
+def test_home_shows_the_write_up_but_never_the_editing_note(monkeypatch):
+    at = _home(monkeypatch, "")
+    text = " ".join(m.value for m in at.markdown)
+    assert "knapsack problem" in text
+    assert "DRAFT" not in text and "rewrite this" not in text

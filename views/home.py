@@ -8,6 +8,7 @@ if _ROOT not in sys.path:
 import streamlit as st
 
 import emission_factors as ef
+import site_content
 import ui
 
 ui.inject_css()
@@ -20,26 +21,39 @@ ui.hero(
     eyebrow="MyCarbon",
 )
 
-c1, c2, _ = st.columns([1.4, 1.2, 3])
-if c1.button("Start the calculator", type="primary", icon=":material/arrow_forward:",
-             width="stretch"):
-    st.switch_page("views/calculator.py")
-if c2.button("How it works", icon=":material/insights:", width="stretch"):
-    st.switch_page("views/how_it_works.py")
 
-ui.section("Some numbers for context", "Tonnes of CO₂ per person per year.")
-ui.tiles([
-    ("Typical urban Indian", f"{ef.INDIA_AVERAGES['Total']:.1f} t",
-     "two-wheeler commuter, same method as your result", True),
-    ("1.5°C lifestyle level, 2030", f"{ef.LIFESTYLE_TARGET_2030.value:g} t",
-     "Hot or Cool Institute", False),
-    ("India, national average", f"{ef.INDIA_NATIONAL_PER_CAPITA.value:g} t",
-     "energy and industry CO₂", False),
-    ("World average", f"{ef.WORLD_AVERAGE_PER_CAPITA:g} t", "", False),
-])
-st.caption("These aren't all measured the same way — the national figure includes "
-           "industry and excludes most food emissions, for example. The calculator "
-           "compares you with the first one, because it's measured exactly like your result.")
+def overview():
+    st.markdown("#### MyCarbon in three steps")
+    ui.steps([
+        ("Tell it how you live",
+         "Commute, electricity bill, diet, home, water and waste. Takes about two minutes, "
+         "or press “Try an example” to skip straight to results."),
+        ("See where your emissions come from",
+         "Your footprint as a likely range, compared with a typical urban Indian and with "
+         "the level needed for the 1.5°C goal."),
+        ("Get the best plan for your money",
+         "Set a yearly budget or a target, and the planner picks the combination of changes "
+         "that cuts the most CO₂."),
+    ])
+    c1, c2 = st.columns(2)
+    if c1.button("Start the calculator", type="primary", icon=":material/arrow_forward:",
+                 width="stretch"):
+        st.switch_page("views/calculator.py")
+    if c2.button("How it works", icon=":material/insights:", width="stretch"):
+        st.switch_page("views/how_it_works.py")
+
+
+video = site_content.video_url()
+if video:
+    # Video first, beside the steps: someone landing here can watch the 3-minute
+    # tour, or skip it and start straight away.
+    v, o = st.columns([7, 5], gap="large")
+    with v:
+        st.video(video)
+    with o:
+        overview()
+else:
+    overview()
 
 ui.section("What you get")
 f1, f2, f3 = st.columns(3, gap="medium")
@@ -61,32 +75,37 @@ with f3:
         st.markdown("Download a three-page PDF, or copy a link that reopens the calculator "
                     "with your details (never your name) filled in.")
 
-ui.section("How it works, briefly")
-ui.steps([
-    ("Tell it how you live",
-     "Commute, electricity bill, diet, home, water and waste. Shared things like "
-     "electricity are split between the people at home."),
-    ("See where your emissions come from",
-     "Each input is multiplied by a published emission factor — India's own grid "
-     "factor for electricity, for example — and compared with a typical urban Indian."),
-    ("Get the best plan for your money",
-     "Choosing changes under a budget is a classic optimisation problem (the 'knapsack "
-     "problem'). MyCarbon solves it exactly with dynamic programming."),
+ui.section("Some numbers for context", "Tonnes of CO₂ per person per year.")
+ui.tiles([
+    ("Typical urban Indian", f"{ef.INDIA_AVERAGES['Total']:.1f} t",
+     "two-wheeler commuter, same method as your result", True),
+    ("1.5°C lifestyle level, 2030", f"{ef.LIFESTYLE_TARGET_2030.value:g} t",
+     "Hot or Cool Institute", False),
+    ("India, national average", f"{ef.INDIA_NATIONAL_PER_CAPITA.value:g} t",
+     "energy and industry CO₂", False),
+    ("World average", f"{ef.WORLD_AVERAGE_PER_CAPITA:g} t", "", False),
 ])
+st.caption("These aren't all measured the same way — the national figure includes "
+           "industry and excludes most food emissions, for example. The calculator "
+           "compares you with the first one, because it's measured exactly like your result.")
 
-ui.section("Findings that surprised me while building it")
-s1, s2 = st.columns(2, gap="medium")
-with s1:
-    with st.container(border=True, height="stretch"):
-        st.markdown("**An electric car isn't the big win here.** On India's coal-heavy "
-                    "grid it's only about 30% cleaner per km than a petrol car. An "
-                    "electric two-wheeler, carpooling, or rooftop solar usually saves "
-                    "far more per rupee.")
-with s2:
-    with st.container(border=True, height="stretch"):
-        st.markdown("**Correct code can still give absurd answers.** An early version "
-                    "recommended carpooling, the metro, cycling *and* an EV for the "
-                    "same commute, and added up all four savings. The algorithm was "
-                    "right; the model was wrong.")
+about = site_content.about_markdown()
+if about:
+    ui.section("About this project")
+    a, g = st.columns([7, 4], gap="large")
+    with a:
+        st.markdown(about)
+    with g:
+        with st.container(border=True):
+            st.markdown("**At a glance**")
+            st.markdown(
+                "- **Built by** Arjun Reddy Bathula\n"
+                "- **Built with** Python, Streamlit, Plotly\n"
+                "- **Algorithm** dynamic programming (multiple-choice knapsack)\n"
+                "- **Data** Central Electricity Authority, DEFRA, peer-reviewed studies\n"
+                "- **Tested** 120+ automated tests, checked against brute force"
+            )
+            st.link_button("View the code on GitHub", "https://github.com/arjunrb0/mycarbon",
+                           icon=":material/code:", width="stretch")
 
 ui.footer()

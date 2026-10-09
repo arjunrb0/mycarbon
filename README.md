@@ -15,7 +15,7 @@ the money they're willing to spend.
 | Streamlit | Interface and deployment |
 | Plotly / Matplotlib | On-screen charts and PDF figures |
 | fpdf2 | PDF report |
-| pytest + GitHub Actions | 120 tests on every push, including a brute-force reference solver and end-to-end tests of the app |
+| pytest + GitHub Actions | 134 tests on every push, including a brute-force reference solver and end-to-end tests of the app |
 
 ---
 
@@ -253,7 +253,7 @@ python -m pytest tests -q
 
 ## Tests
 
-120 tests, run by GitHub Actions on every push.
+134 tests, run by GitHub Actions on every push.
 
 - **Brute-force checks.** A reference solver tries all 2ⁿ combinations and is by
   definition correct. The DP, the frontier, and target mode are all compared
@@ -287,6 +287,8 @@ insights.py             Plain-language verdicts and tips
 charts.py               Plotly charts (colour-blind-checked palette)
 report.py               PDF report
 ui.py                   Shared visual components
+site_content.py         Demo video link (paste a YouTube URL here)
+content/about_project.md  The "About this project" write-up on the home page
 tests/                  pytest suite
 ```
 
