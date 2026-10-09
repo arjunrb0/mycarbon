@@ -15,7 +15,7 @@ the money they're willing to spend.
 | Streamlit | Interface and deployment |
 | Plotly / Matplotlib | On-screen charts and PDF figures |
 | fpdf2 | PDF report |
-| pytest + GitHub Actions | 134 tests on every push, including a brute-force reference solver and end-to-end tests of the app |
+| pytest + GitHub Actions | 138 tests on every push, including a brute-force reference solver and end-to-end tests of the app |
 
 ---
 
@@ -253,7 +253,7 @@ python -m pytest tests -q
 
 ## Tests
 
-134 tests, run by GitHub Actions on every push.
+138 tests, run by GitHub Actions on every push.
 
 - **Brute-force checks.** A reference solver tries all 2ⁿ combinations and is by
   definition correct. The DP, the frontier, and target mode are all compared
@@ -267,6 +267,12 @@ python -m pytest tests -q
   results surviving further interaction (the bug that motivated the redesign),
   inputs surviving a page change, share links round-tripping, hostile links
   being clamped rather than crashing, and the PDF being generated.
+
+**Keep-awake.** Free Streamlit apps sleep after 12 hours without visitors, and a plain
+HTTP ping doesn't count as a visit — it gets the same "OK" whether the app is awake
+or asleep. A scheduled GitHub Action opens the site in a real headless browser every
+6 hours, clicks the wake button if needed, and fails (emailing me) if the app never
+appears. Its tests use a fake sleep screen, so they run without the internet.
 
 Writing these found real problems twice: a Low-confidence factor with no
 caveat, and a crash when a shared link produced inputs that emit nothing.
@@ -289,6 +295,7 @@ report.py               PDF report
 ui.py                   Shared visual components
 site_content.py         Demo video link (paste a YouTube URL here)
 content/about_project.md  The "About this project" write-up on the home page
+scripts/keep_awake.py   Visits the live site every 6 hours so it never falls asleep
 tests/                  pytest suite
 ```
 

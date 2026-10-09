@@ -80,6 +80,8 @@ def inject_css():
 
 
 def hero(title: str, subtitle: str = "", eyebrow: str = ""):
+    # scripts/keep_awake.py looks for the .mc-hero class to know the live app
+    # is really running — keep it if you restyle this.
     st.html(
         f"<div class='mc-hero'>"
         + (f"<p class='mc-eyebrow'>{html.escape(eyebrow)}</p>" if eyebrow else "")

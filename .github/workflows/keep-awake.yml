@@ -1,0 +1,33 @@
+name: keep site awake
+
+# Free Streamlit apps sleep after 12 hours with no visitors. Visiting every
+# 6 hours keeps the live site awake, and wakes it if it fell asleep anyway.
+# A failed run means the site didn't come up — GitHub emails you about it.
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # every 6 hours; :17 avoids the busy top of the hour
+  workflow_dispatch:          # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "playwright>=1.45"
+      - run: python -m playwright install --with-deps chromium
+      - run: python scripts/keep_awake.py
+        env:
+          APP_URL: https://mycarbon.streamlit.app/
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keep-awake-screenshot
+          path: keep-awake.png
+          if-no-files-found: ignore

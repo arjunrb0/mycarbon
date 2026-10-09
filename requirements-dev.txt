@@ -2,3 +2,4 @@
 # Community Cloud installs for the live site.
 pytest>=8
 pypdf>=4
+playwright>=1.45   # keep-awake script tests (also needs: python -m playwright install chromium)
