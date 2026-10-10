@@ -100,6 +100,7 @@ if about:
             st.markdown("**At a glance**")
             st.markdown(
                 "- **Built by** Arjun Reddy Bathula\n"
+                "- **Started** January 2025, as my MYP 5 Personal Project\n"
                 "- **Built with** Python, Streamlit, Plotly\n"
                 "- **Algorithm** dynamic programming (multiple-choice knapsack)\n"
                 "- **Data** Central Electricity Authority, DEFRA, peer-reviewed studies\n"
